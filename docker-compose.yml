@@ -1,0 +1,91 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.runCommand({ping:1})"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+      - D:\Ollama\Models:/root/.ollama/models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  web:
+    build: .
+    context: ./backend
+    ports:
+      - "8501:8501"
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_LLM_MODEL: ${OLLAMA_LLM_MODEL:-qwen2:7b-instruct}
+      OLLAMA_VL_MODEL: ${OLLAMA_VL_MODEL:-qwen2.5-vl:3b}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MONGO_URL: ${MONGO_URL:-mongodb://mongodb:27017}
+      MONGO_DB: ${MONGO_DB:-nia}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: streamlit run nia/web/app.py --server.port=8501 --server.address=0.0.0.0
+
+  crawler:
+    build: .
+    context: ./backend
+    depends_on:
+      redis:
+        condition: service_healthy
+      mongodb:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_LLM_MODEL: ${OLLAMA_LLM_MODEL:-qwen2:7b-instruct}
+      OLLAMA_VL_MODEL: ${OLLAMA_VL_MODEL:-qwen2.5-vl:3b}
+      OLLAMA_EMBED_MODEL: ${OLLAMA_EMBED_MODEL:-nomic-embed-text}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+      MONGO_URL: ${MONGO_URL:-mongodb://mongodb:27017}
+      MONGO_DB: ${MONGO_DB:-nia}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    command: scrapy crawl smart
+
+volumes:
+  redis_data:
+  mongo_data:
+  ollama_data:

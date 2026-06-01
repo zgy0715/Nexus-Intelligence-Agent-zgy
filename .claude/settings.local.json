@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm cache *)",
+      "Bash(pip cache *)",
+      "Bash(curl -s -X POST http://localhost:8000/api/crawl -H \"Content-Type: application/json\" -d '{\"url\":\"https://example.com\",\"instruction\":\"test\"}')",
+      "Bash(curl -s -X POST http://localhost:8000/api/crawl -H \"Content-Type: application/json; charset=utf-8\" -d '{\"url\":\"https://example.com\",\"instruction\":\"提取标题\"}')",
+      "Bash(curl -s -X POST http://localhost:5173/api/crawl -H \"Content-Type: application/json\" -d '{\"url\":\"https://example.com\",\"instruction\":\"test\"}')",
+      "Bash(curl -s http://localhost:5173/api/crawl/results)",
+      "Bash(tasklist)"
+    ]
+  }
+}
