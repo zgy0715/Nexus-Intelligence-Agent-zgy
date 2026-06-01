@@ -2,7 +2,6 @@ import json
 import logging
 import uuid
 import time
-import threading
 from datetime import datetime
 from urllib.parse import urlparse
 
@@ -13,8 +12,6 @@ from pydantic import BaseModel
 from nia.utils.config import Config
 
 logger = logging.getLogger(__name__)
-# 确保日志输出到控制台
-logging.basicConfig(level=logging.INFO)
 
 router = APIRouter(prefix="/api/crawl", tags=["crawl"])
 
@@ -56,11 +53,8 @@ def _save_result(result: dict):
         logger.error(f"Failed to persist crawl results to Redis: {e}")
 
 
-def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool):
-    """在独立线程中执行爬取任务"""
-    print(f"[CRAWL] Starting crawl for {url}", flush=True)
-    logger.info(f"[{task_id}] Starting crawl for {url}")
-
+def _do_crawl_sync(task_id: str, url: str, instruction: str, use_js: bool) -> dict:
+    """同步执行爬取任务"""
     result = {
         "task_id": task_id,
         "url": url,
@@ -73,7 +67,7 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool):
 
     try:
         # Step 1: 抓取页面
-        print(f"[CRAWL] Fetching page...", flush=True)
+        print(f"[CRAWL] Fetching {url} ...", flush=True)
         html_content = ""
         if use_js:
             from nia.utils.crawl4ai_engine import Crawl4AIEngine
@@ -135,13 +129,12 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool):
                 ]
                 print(f"[CRAWL] Calling Ollama...", flush=True)
                 response = ollama.chat(messages, temperature=0.1)
-                print(f"[CRAWL] Got Ollama response, parsing...", flush=True)
+                print(f"[CRAWL] Got response, parsing...", flush=True)
                 extracted_data = parser.parse(response)
                 extraction_method = "ai"
-                print(f"[CRAWL] AI extraction successful: {list(extracted_data.keys())}", flush=True)
+                print(f"[CRAWL] AI extraction successful", flush=True)
             except Exception as e:
                 print(f"[CRAWL] AI extraction failed: {e}", flush=True)
-                logger.warning(f"[{task_id}] AI extraction failed: {e}")
                 extraction_method = "failed"
 
         # Step 4: 存入 MongoDB
@@ -170,7 +163,6 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool):
             print(f"[CRAWL] Stored in MongoDB", flush=True)
         except Exception as e:
             print(f"[CRAWL] MongoDB failed: {e}", flush=True)
-            logger.warning(f"[{task_id}] MongoDB storage failed: {e}")
 
         # Step 5: RAG 索引
         print(f"[CRAWL] Indexing for RAG...", flush=True)
@@ -181,7 +173,6 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool):
             print(f"[CRAWL] RAG index updated", flush=True)
         except Exception as e:
             print(f"[CRAWL] RAG indexing failed: {e}", flush=True)
-            logger.warning(f"[{task_id}] RAG indexing failed: {e}")
 
         result["status"] = "completed"
         result["title"] = title
@@ -192,38 +183,22 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool):
 
     except Exception as e:
         print(f"[CRAWL] Crawl failed: {e}", flush=True)
-        logger.error(f"[{task_id}] Crawl failed: {e}", exc_info=True)
         result["status"] = "failed"
         result["error"] = str(e)[:500]
 
     _save_result(result)
+    return result
 
 
 @router.post("")
 async def create_crawl_task(req: CrawlRequest):
-    """提交爬取任务（异步执行）"""
+    """提交爬取任务（同步等待完成）"""
     task_id = str(uuid.uuid4())
 
-    result = {
-        "task_id": task_id,
-        "url": req.url,
-        "instruction": req.instruction,
-        "use_js": req.use_js,
-        "status": "queued",
-        "timestamp": time.strftime("%Y-%m-%d %H:%M:%S"),
-    }
-    _save_result(result)
+    # 同步执行爬取
+    result = _do_crawl_sync(task_id, req.url, req.instruction, req.use_js)
 
-    # 启动后台线程
-    t = threading.Thread(
-        target=_do_crawl,
-        args=(task_id, req.url, req.instruction, req.use_js),
-        daemon=True,
-    )
-    t.start()
-    print(f"[CRAWL] Thread started for task {task_id}", flush=True)
-
-    return {"task_id": task_id, "status": "queued"}
+    return result
 
 
 @router.get("/results")
