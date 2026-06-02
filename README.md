@@ -214,6 +214,7 @@ npm run dev
 ### ModuleNotFoundError: No module named 'nia'
 
 ```bash
+cd "D:\Nexus Intelligence Agent\backend"
 pip install -e .
 ```
 
@@ -235,6 +236,16 @@ pip install nest-asyncio
 ollama serve
 ```
 
+### Ollama 模型不显示
+
+设置模型目录环境变量：
+
+```powershell
+[System.Environment]::SetEnvironmentVariable("OLLAMA_MODELS", "D:\Ollama\Models", "User")
+```
+
+然后重启 Ollama。
+
 ### Redis 连接失败
 
 ```bash
@@ -248,6 +259,35 @@ mongod --dbpath D:\MongoDB\data
 ```
 
 ## 更新日志
+
+### 2026-06-01 — 爬取流程修复与项目重构
+
+**核心修复**
+
+1. **nia/api/crawl.py** — 重写爬取 API，让爬取真正执行
+   - 移除无效的 Redis 队列调度（原来只入队不执行）
+   - 新增完整爬取流程：crawl4ai 抓取 → AI 提取 → MongoDB 存储 → FAISS 索引
+   - 支持 JS 渲染模式（动态网页）
+   - 前端提交任务后可轮询结果
+
+**项目结构重组**
+
+2. **目录结构调整** — 前后端分离
+   - `frontend/` — React 前端（src, public, package.json, vite.config.ts 等）
+   - `backend/` — Python 后端（nia/, pyproject.toml, requirements.txt 等）
+   - 根目录只保留 Docker、README 等公共文件
+
+3. **配置文件更新**
+   - `README.md` — 更新项目结构、启动命令路径
+   - `运行步骤.md` — 更新所有 cd 路径
+   - `Dockerfile` — COPY 路径改为 backend/
+   - `docker-compose.yml` — build.context 改为 ./backend
+   - `.gitignore` — 适配新结构
+
+**已知问题**
+
+- JS 渲染模式需要安装 Playwright：`playwright install chromium`
+- AI 提取速度取决于 Ollama 模型性能（qwen2:7b-instruct 约 30-60 秒）
 
 ### 2026-05-23 — 全面代码审查与修复
 
