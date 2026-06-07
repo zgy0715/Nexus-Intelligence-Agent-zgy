@@ -9,7 +9,15 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/data", tags=["data"])
 
-db = DatabaseManager()
+# 延迟初始化（避免模块加载时 MongoDB 不可用导致崩溃）
+_db = None
+
+
+def _get_db():
+    global _db
+    if _db is None:
+        _db = DatabaseManager()
+    return _db
 
 
 @router.get("")
@@ -19,6 +27,7 @@ async def get_crawled_data(
     search: str | None = Query(None),
 ):
     try:
+        db = _get_db()
         collection = db.get_collection("crawled_data")
         query_filter = {}
         if search:
