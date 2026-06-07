@@ -1,15 +1,17 @@
-from langchain_core.messages import HumanMessage, SystemMessage
-
-from nia.ai.ollama_client import OllamaClient
-from nia.rag.embedding import EmbeddingManager
-from nia.rag.vector_store import VectorStore
-
-
 class RAGEngine:
     def __init__(self):
+        # 延迟导入，避免启动时阻塞
+        from nia.rag.embedding import EmbeddingManager
+        from nia.rag.vector_store import VectorStore
         self._embedding_manager = EmbeddingManager()
         self._vector_store = VectorStore()
-        self._ollama_client = OllamaClient()
+        self._llm_client = None
+
+    def _get_llm_client(self):
+        if self._llm_client is None:
+            from nia.ai.llm_client import LLMClient
+            self._llm_client = LLMClient()
+        return self._llm_client
 
     def index_data(
         self, url: str, title: str, content: str, crawled_data_id: str
@@ -28,10 +30,10 @@ class RAGEngine:
         search_results = self._vector_store.similarity_search(query_embedding, top_k=5)
 
         if not search_results:
-            return {
-                "answer": "未找到相关内容，请尝试其他问题。",
-                "sources": [],
-            }
+            return {"answer": "", "sources": [], "relevance": 0.0}
+
+        # 计算最高相似度分数
+        max_score = max(r.get("similarity_score", 0) for r in search_results)
 
         context_parts = []
         for i, result in enumerate(search_results, 1):
@@ -41,17 +43,12 @@ class RAGEngine:
         context = "\n\n".join(context_parts)
 
         messages = [
-            SystemMessage(
-                content="你是一个智能问答助手。请根据提供的参考内容回答用户的问题。"
-                "如果参考内容中没有相关信息，请明确说明。"
-                "回答时请引用来源编号，例如[来源1]。"
-            ),
-            HumanMessage(
-                content=f"参考内容:\n\n{context}\n\n用户问题: {question}"
-            ),
+            {"role": "system", "content": "你是一个智能问答助手。请根据提供的参考内容回答用户的问题。如果参考内容中没有相关信息，请明确说明。回答时请引用来源编号，例如[来源1]。"},
+            {"role": "user", "content": f"参考内容:\n\n{context}\n\n用户问题: {question}"},
         ]
 
-        answer = self._ollama_client.chat(messages, temperature=0.3)
+        llm_client = self._get_llm_client()
+        answer = llm_client.chat(messages, temperature=0.3)
 
         sources = []
         seen_ids = set()
@@ -62,15 +59,14 @@ class RAGEngine:
                 snippet = result["content_chunk"]
                 if len(snippet) > 200:
                     snippet = snippet[:200] + "..."
-                sources.append(
-                    {
-                        "url": result["url"],
-                        "title": result["title"],
-                        "content_snippet": snippet,
-                    }
-                )
+                sources.append({
+                    "url": result["url"],
+                    "title": result["title"],
+                    "content_snippet": snippet,
+                })
 
         return {
             "answer": answer,
             "sources": sources,
+            "relevance": max_score,
         }

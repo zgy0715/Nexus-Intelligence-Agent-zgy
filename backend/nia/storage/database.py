@@ -43,12 +43,17 @@ class DatabaseManager:
             self._db["crawled_data"].create_index("url")
             self._db["crawled_data"].create_index("domain")
             self._db["crawled_data"].create_index("created_at")
+            self._db["crawl_tasks"].create_index("task_id", unique=True)
+            self._db["crawl_tasks"].create_index("status")
+            self._db["crawl_tasks"].create_index("created_at")
+            self._db["chat_history"].create_index("created_at")
+            self._db["chat_history"].create_index("role")
             self._db["vector_data"].create_index("crawled_data_id")
-            self._db["data_versions"].create_index("crawled_data_id")
-            self._db["data_versions"].create_index([("crawled_data_id", 1), ("version_number", 1)])
             self._db["task_logs"].create_index("url")
             self._db["task_logs"].create_index("domain")
             self._db["task_logs"].create_index("created_at")
+            self._db["agent_runs"].create_index("run_id", unique=True)
+            self._db["agent_runs"].create_index("created_at")
         except ConnectionFailure:
             pass
 
