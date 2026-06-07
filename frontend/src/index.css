@@ -2,188 +2,210 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --bg-primary: #0a0a0f;
-  --bg-secondary: #111118;
-  --bg-card: #16161f;
-  --bg-card-hover: #1c1c28;
-  --accent: #00ffa3;
-  --accent-dim: #00cc82;
-  --info: #3b82f6;
-  --warning: #f59e0b;
-  --error: #ef4444;
-  --text-primary: #e4e4e7;
-  --text-secondary: #a1a1aa;
-  --text-muted: #71717a;
-  --border: #27272a;
-  --border-glow: rgba(0, 255, 163, 0.3);
-  --font-heading: 'JetBrains Mono', monospace;
-  --font-body: 'Inter', sans-serif;
-}
-
-* {
-  margin: 0;
-  padding: 0;
-  box-sizing: border-box;
-}
-
-html, body, #root {
-  height: 100%;
-  width: 100%;
-}
-
-body {
-  font-family: var(--font-body);
-  background-color: var(--bg-primary);
-  color: var(--text-primary);
-  line-height: 1.6;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-}
-
-h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-heading);
-}
-
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
-}
-
-::-webkit-scrollbar-track {
-  background: var(--bg-primary);
-}
-
-::-webkit-scrollbar-thumb {
-  background: var(--border);
-  border-radius: 3px;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  background: var(--text-muted);
-}
-
-::selection {
-  background: rgba(0, 255, 163, 0.2);
-  color: var(--accent);
-}
-
-input:focus, textarea:focus, select:focus, button:focus-visible {
-  outline: none;
-  box-shadow: 0 0 0 2px var(--border-glow);
-}
-
-@layer components {
-  .neon-glow {
-    box-shadow: 0 0 10px rgba(0, 255, 163, 0.15),
-                0 0 30px rgba(0, 255, 163, 0.05);
+/* ─────────────────────────────────────────────────────────────
+   设计 Token — 近无彩黑白灰（Linear / Vercel 风），明/暗双主题
+   暗色：近黑背景 + 近白主色按钮；明色：近白背景 + 近黑主色按钮
+   ───────────────────────────────────────────────────────────── */
+@layer base {
+  :root {
+    --background: 0 0% 99%;
+    --foreground: 240 6% 10%;
+    --card: 0 0% 100%;
+    --card-foreground: 240 6% 10%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 240 6% 10%;
+    --primary: 240 6% 10%;
+    --primary-foreground: 0 0% 98%;
+    --secondary: 240 5% 96%;
+    --secondary-foreground: 240 6% 10%;
+    --muted: 240 5% 96%;
+    --muted-foreground: 240 4% 44%;
+    --accent: 240 5% 94%;
+    --accent-foreground: 240 6% 10%;
+    --success: 142 64% 38%;
+    --warning: 32 90% 44%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 6% 90%;
+    --input: 240 6% 90%;
+    --ring: 240 5% 45%;
+    --glow: 240 8% 55%;
+    --radius: 0.7rem;
   }
 
-  .neon-glow-strong {
-    box-shadow: 0 0 10px rgba(0, 255, 163, 0.3),
-                0 0 40px rgba(0, 255, 163, 0.1),
-                0 0 80px rgba(0, 255, 163, 0.05);
+  .dark {
+    --background: 240 6% 7%;
+    --foreground: 0 0% 98%;
+    --card: 240 5% 10%;
+    --card-foreground: 0 0% 98%;
+    --popover: 240 5% 11%;
+    --popover-foreground: 0 0% 98%;
+    --primary: 0 0% 98%;
+    --primary-foreground: 240 6% 9%;
+    --secondary: 240 4% 15%;
+    --secondary-foreground: 0 0% 98%;
+    --muted: 240 4% 15%;
+    --muted-foreground: 240 5% 63%;
+    --accent: 240 4% 16%;
+    --accent-foreground: 0 0% 98%;
+    --success: 142 58% 47%;
+    --warning: 38 92% 56%;
+    --destructive: 0 72% 58%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 240 4% 16%;
+    --input: 240 4% 17%;
+    --ring: 0 0% 72%;
+    --glow: 0 0% 100%;
   }
 
-  .neon-text {
-    text-shadow: 0 0 10px rgba(0, 255, 163, 0.5),
-                 0 0 30px rgba(0, 255, 163, 0.2);
+  * {
+    @apply border-border;
   }
 
-  .card-bg {
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: 0.5rem;
+  html,
+  body,
+  #root {
+    height: 100%;
+    width: 100%;
   }
 
-  .card-bg:hover {
-    background: var(--bg-card-hover);
-    border-color: rgba(0, 255, 163, 0.2);
-  }
-
-  .scan-line {
-    position: relative;
-    overflow: hidden;
-  }
-
-  .scan-line::after {
-    content: '';
-    position: absolute;
-    inset: 0;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(0, 255, 163, 0.015) 2px,
-      rgba(0, 255, 163, 0.015) 4px
+  body {
+    @apply text-foreground antialiased;
+    background-color: hsl(var(--background));
+    /* 顶部柔和光晕，制造层次与高级感 */
+    background-image: radial-gradient(
+      48rem 24rem at 50% -8%,
+      hsl(var(--glow) / 0.05),
+      transparent 70%
     );
-    pointer-events: none;
-    z-index: 1;
+    background-attachment: fixed;
+    font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+      "Microsoft YaHei", sans-serif;
+    font-feature-settings: "cv11", "ss01";
+    letter-spacing: -0.006em;
   }
 
-  .btn-primary {
-    @apply px-4 py-2 rounded font-medium transition-all duration-200;
-    background: var(--accent);
-    color: var(--bg-primary);
-    font-family: var(--font-heading);
-  }
-
-  .btn-primary:hover {
-    box-shadow: 0 0 15px rgba(0, 255, 163, 0.4),
-                0 0 40px rgba(0, 255, 163, 0.15);
-    transform: translateY(-1px);
-  }
-
-  .btn-primary:active {
-    transform: translateY(0);
-  }
-
-  .btn-secondary {
-    @apply px-4 py-2 rounded font-medium transition-all duration-200;
-    background: transparent;
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    font-family: var(--font-heading);
-  }
-
-  .btn-secondary:hover {
-    background: rgba(0, 255, 163, 0.1);
-    box-shadow: 0 0 10px rgba(0, 255, 163, 0.2);
-  }
-
-  .input-field {
-    @apply w-full px-3 py-2 rounded transition-all duration-200;
-    background: var(--bg-secondary);
-    border: 1px solid var(--border);
-    color: var(--text-primary);
-    font-family: var(--font-body);
-  }
-
-  .input-field::placeholder {
-    color: var(--text-muted);
-  }
-
-  .input-field:focus {
-    border-color: var(--accent);
-    box-shadow: 0 0 0 2px var(--border-glow);
+  h1, h2, h3 {
+    letter-spacing: -0.02em;
   }
 }
 
-@keyframes pulse-glow {
-  0%, 100% {
-    box-shadow: 0 0 5px rgba(0, 255, 163, 0.3);
+/* ─────────────────────────────────────────────────────────────
+   滚动条 / 选区
+   ───────────────────────────────────────────────────────────── */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: hsl(var(--muted-foreground) / 0.22);
+  border-radius: 8px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: hsl(var(--muted-foreground) / 0.4);
+}
+::selection {
+  background: hsl(var(--foreground) / 0.14);
+}
+
+@layer utilities {
+  /* 骨架屏微光 */
+  .shimmer {
+    background: linear-gradient(
+      90deg,
+      hsl(var(--muted)) 25%,
+      hsl(var(--muted-foreground) / 0.1) 37%,
+      hsl(var(--muted)) 63%
+    );
+    background-size: 400% 100%;
+    animation: shimmer 1.4s ease infinite;
   }
-  50% {
-    box-shadow: 0 0 15px rgba(0, 255, 163, 0.6),
-                0 0 30px rgba(0, 255, 163, 0.2);
+  @keyframes shimmer {
+    0% {
+      background-position: 100% 50%;
+    }
+    100% {
+      background-position: 0 50%;
+    }
+  }
+
+  .text-gradient {
+    @apply bg-gradient-to-br from-foreground to-muted-foreground bg-clip-text text-transparent;
+  }
+
+  /* Linear 风精致卡片：细边框 + 顶部内高光 */
+  .card-elevated {
+    background: hsl(var(--card));
+    border: 1px solid hsl(var(--border));
+    box-shadow:
+      0 1px 0 0 hsl(var(--foreground) / 0.02) inset,
+      0 1px 2px 0 hsl(0 0% 0% / 0.04);
+  }
+
+  .glass {
+    background: hsl(var(--card) / 0.6);
+    backdrop-filter: blur(14px) saturate(140%);
+    border: 1px solid hsl(var(--border) / 0.8);
+  }
+
+  /* 品牌标记 / 头部图标的精致网格底纹 */
+  .grid-bg {
+    background-image:
+      linear-gradient(to right, hsl(var(--border) / 0.6) 1px, transparent 1px),
+      linear-gradient(to bottom, hsl(var(--border) / 0.6) 1px, transparent 1px);
+    background-size: 22px 22px;
   }
 }
 
-@keyframes scan-move {
-  0% {
-    transform: translateY(-100%);
-  }
-  100% {
-    transform: translateY(100vh);
-  }
+/* ─────────────────────────────────────────────────────────────
+   Markdown 渲染（Agent 报告 / 问答答案）
+   ───────────────────────────────────────────────────────────── */
+.markdown {
+  @apply text-sm leading-relaxed text-foreground;
+}
+.markdown h1 {
+  @apply mb-3 mt-4 text-xl font-bold tracking-tight;
+}
+.markdown h2 {
+  @apply mb-2 mt-4 text-lg font-semibold tracking-tight;
+}
+.markdown h3 {
+  @apply mb-2 mt-3 text-base font-semibold;
+}
+.markdown p {
+  @apply my-2;
+}
+.markdown ul {
+  @apply my-2 list-disc space-y-1 pl-5;
+}
+.markdown ol {
+  @apply my-2 list-decimal space-y-1 pl-5;
+}
+.markdown a {
+  @apply text-foreground underline underline-offset-2 hover:opacity-70;
+}
+.markdown code {
+  @apply rounded bg-secondary px-1.5 py-0.5 font-mono text-xs;
+}
+.markdown pre {
+  @apply my-3 overflow-auto rounded-lg border border-border bg-secondary p-3 text-xs;
+}
+.markdown pre code {
+  @apply bg-transparent p-0;
+}
+.markdown blockquote {
+  @apply my-3 border-l-2 border-border pl-3 text-muted-foreground;
+}
+.markdown table {
+  @apply my-3 w-full border-collapse text-xs;
+}
+.markdown th,
+.markdown td {
+  @apply border border-border px-2 py-1 text-left;
+}
+.markdown strong {
+  @apply font-semibold text-foreground;
 }

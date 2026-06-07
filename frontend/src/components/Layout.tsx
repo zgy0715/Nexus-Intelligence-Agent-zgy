@@ -1,9 +1,28 @@
+/**
+ * 布局组件 — 侧边栏 + 顶栏 + 内容区（含暗色切换）
+ */
+
 import { NavLink, Outlet } from "react-router-dom";
-import { Globe, MessageSquare, Database, Activity, Settings, Menu, X, Bug } from "lucide-react";
+import {
+  Bot,
+  Globe,
+  MessageSquare,
+  Database,
+  Activity,
+  Settings,
+  Menu,
+  X,
+  Sun,
+  Moon,
+  Sparkles,
+} from "lucide-react";
 import { useStore } from "../store";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/Button";
 
 const navItems = [
-  { to: "/", icon: Globe, label: "零配置抓取" },
+  { to: "/", icon: Bot, label: "自主 Agent", end: true },
+  { to: "/crawl", icon: Globe, label: "批量爬取" },
   { to: "/qa", icon: MessageSquare, label: "语义问答" },
   { to: "/data", icon: Database, label: "数据浏览" },
   { to: "/monitor", icon: Activity, label: "任务监控" },
@@ -11,133 +30,100 @@ const navItems = [
 ];
 
 export default function Layout() {
-  const { sidebarOpen, toggleSidebar, setSidebarOpen } = useStore();
+  const { sidebarOpen, toggleSidebar, setSidebarOpen, theme, toggleTheme } = useStore();
 
   return (
-    <div className="flex h-screen overflow-hidden" style={{ background: "var(--bg-primary)" }}>
+    <div className="flex h-screen overflow-hidden bg-background">
+      {/* 移动端遮罩 */}
       {sidebarOpen && (
         <div
-          className="fixed inset-0 bg-black/50 z-30 lg:hidden"
+          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
           onClick={() => setSidebarOpen(false)}
         />
       )}
 
+      {/* 侧边栏 */}
       <aside
-        className={`fixed lg:relative z-40 h-full flex flex-col transition-all duration-300 border-r ${
-          sidebarOpen ? "w-60" : "w-0 lg:w-16"
-        }`}
-        style={{
-          background: "var(--bg-secondary)",
-          borderColor: "var(--border)",
-          overflow: "hidden",
-        }}
+        className={cn(
+          "fixed z-40 flex h-full flex-col border-r border-border bg-card transition-all duration-300 lg:relative",
+          sidebarOpen ? "w-60" : "w-0 lg:w-16",
+        )}
       >
-        <div className="flex items-center gap-3 px-4 h-16 border-b shrink-0" style={{ borderColor: "var(--border)" }}>
-          <Bug
-            size={24}
-            style={{ color: "var(--accent)", minWidth: 24 }}
-            className="shrink-0"
-          />
+        {/* Logo */}
+        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-border px-4">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary shadow-sm">
+            <Sparkles size={18} className="text-primary-foreground" />
+          </div>
           {sidebarOpen && (
             <div className="flex flex-col overflow-hidden">
-              <span
-                className="text-sm font-bold tracking-wider neon-text whitespace-nowrap"
-                style={{ color: "var(--accent)", fontFamily: "var(--font-heading)" }}
-              >
-                NIA
-              </span>
-              <span
-                className="text-[10px] whitespace-nowrap"
-                style={{ color: "var(--text-muted)" }}
-              >
+              <span className="whitespace-nowrap text-sm font-bold text-foreground">NIA</span>
+              <span className="whitespace-nowrap text-[10px] text-muted-foreground">
                 Nexus Intelligence Agent
               </span>
             </div>
           )}
         </div>
 
-        <nav className="flex-1 py-4 flex flex-col gap-1 px-2">
+        {/* 导航 */}
+        <nav className="flex flex-1 flex-col gap-1 px-2 py-4">
           {navItems.map((item) => (
             <NavLink
               key={item.to}
               to={item.to}
-              end={item.to === "/"}
+              end={item.end}
               onClick={() => {
                 if (window.innerWidth < 1024) setSidebarOpen(false);
               }}
               className={({ isActive }) =>
-                `flex items-center gap-3 px-3 py-2.5 rounded transition-all duration-200 group ${
-                  sidebarOpen ? "" : "justify-center"
-                } ${
+                cn(
+                  "group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all duration-200",
+                  !sidebarOpen && "justify-center",
                   isActive
-                    ? "neon-glow"
-                    : "hover:bg-[var(--bg-card)]"
-                }`
+                    ? "bg-accent font-medium text-accent-foreground"
+                    : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                )
               }
-              style={({ isActive }) => ({
-                color: isActive ? "var(--accent)" : "var(--text-secondary)",
-                borderLeft: isActive ? "3px solid var(--accent)" : "3px solid transparent",
-                fontFamily: isActive ? "var(--font-heading)" : "var(--font-body)",
-                fontWeight: isActive ? 600 : 400,
-              })}
             >
-              <item.icon size={20} className="shrink-0" />
-              {sidebarOpen && (
-                <span className="text-sm whitespace-nowrap">{item.label}</span>
-              )}
+              <item.icon size={18} className="shrink-0" />
+              {sidebarOpen && <span className="whitespace-nowrap text-sm">{item.label}</span>}
             </NavLink>
           ))}
         </nav>
 
-        <div className="px-4 py-3 border-t shrink-0" style={{ borderColor: "var(--border)" }}>
+        {/* 底部状态 */}
+        <div className="shrink-0 border-t border-border px-4 py-3">
           {sidebarOpen && (
             <div className="flex items-center gap-2">
-              <div
-                className="w-2 h-2 rounded-full"
-                style={{
-                  background: "var(--accent)",
-                  animation: "pulse-glow 2s ease-in-out infinite",
-                }}
-              />
-              <span className="text-xs" style={{ color: "var(--text-muted)" }}>
-                系统就绪
+              <span className="relative flex h-2 w-2">
+                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success/60" />
+                <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
               </span>
+              <span className="text-[11px] text-muted-foreground">系统就绪</span>
             </div>
           )}
         </div>
       </aside>
 
-      <div className="flex-1 flex flex-col min-w-0">
-        <header
-          className="h-14 flex items-center px-4 border-b shrink-0 gap-3"
-          style={{
-            background: "var(--bg-secondary)",
-            borderColor: "var(--border)",
-          }}
-        >
-          <button
-            onClick={toggleSidebar}
-            className="p-1.5 rounded transition-colors duration-200 hover:bg-[var(--bg-card)]"
-            style={{ color: "var(--text-secondary)" }}
-          >
-            {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
-          </button>
-          <div
-            className="h-5 w-px"
-            style={{ background: "var(--border)" }}
-          />
-          <span
-            className="text-xs tracking-widest uppercase"
-            style={{ color: "var(--text-muted)", fontFamily: "var(--font-heading)" }}
-          >
-            NEXUS INTELLIGENCE
+      {/* 主内容区 */}
+      <div className="flex min-w-0 flex-1 flex-col">
+        {/* 顶栏 */}
+        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
+          <Button variant="ghost" size="icon" onClick={toggleSidebar} aria-label="切换侧边栏">
+            {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
+          </Button>
+          <div className="h-4 w-px bg-border" />
+          <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
+            Nexus Intelligence
           </span>
+          <div className="ml-auto">
+            <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="切换主题">
+              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
+            </Button>
+          </div>
         </header>
 
-        <main
-          className="flex-1 overflow-auto p-6 scan-line"
-          style={{ background: "var(--bg-primary)" }}
-        >
+        {/* 内容 */}
+        <main className="flex-1 overflow-auto">
           <Outlet />
         </main>
       </div>
