@@ -1,24 +1,31 @@
-scrapy>=2.11.0
-scrapy-redis>=0.7.0
-crawl4ai>=0.3.0
-langchain>=0.1.0
-langchain-core>=0.1.0
-langchain-ollama>=0.1.0
-langchain-community>=0.0.10
-ollama>=0.1.0
-redis>=5.0.0
-pymongo>=4.6.0
-faiss-cpu>=1.7.0
-numpy>=1.25.0
-nest-asyncio>=1.6.0
-streamlit>=1.30.0
-ddddocr>=1.5.0
-Pillow>=10.0.0
-beautifulsoup4>=4.12.0
-lxml>=5.0.0
-python-dotenv>=1.0.0
-pydantic>=2.0.0
+# ── Web 框架 ──
 fastapi>=0.109.0
 uvicorn>=0.27.0
-requests>=2.31.0
+
+# ── 爬取 ──
+crawl4ai>=0.3.0          # 可选 JS 渲染（Playwright）
+httpx>=0.27.0            # 异步抓取 + LLM 调用
+beautifulsoup4>=4.12.0
+lxml>=5.0.0
+cssselect>=1.2.0          # lxml .cssselect() 依赖（原由 scrapy 间接提供）
+
+# ── LLM / 消息格式 ──
+langchain-core>=0.1.0    # query.py 使用其 Message 类型
+langchain-openai>=0.1.0  # 可选 OpenAI embedding
+
+# ── Embedding / 向量 ──
+fastembed>=0.3.0         # 本地 ONNX embedding（默认，无需 Ollama/torch）
+faiss-cpu>=1.7.0
+numpy>=1.25.0
+
+# ── 基础设施 ──
+redis>=5.0.0
+pymongo>=4.6.0
+
+# ── 数据 / 工具 ──
+ddddocr>=1.5.0           # 验证码识别
+Pillow>=10.0.0
 pandas>=2.0.0
+requests>=2.31.0
+python-dotenv>=1.0.0
+pydantic>=2.0.0

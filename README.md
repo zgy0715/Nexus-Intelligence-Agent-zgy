@@ -1,36 +1,35 @@
 # Nexus Intelligence Agent (NIA)
 
-下一代智能网络爬虫与情报分析系统，完全基于本地免费 AI 技术构建。
+下一代智能网络爬虫与情报分析系统 —— 基于 DeepSeek 的**自主爬取 Agent** + 并发爬取引擎，精简到只需 Redis + MongoDB。
 
 ## 核心特性
 
-- **全程离线零成本** - 所有 AI 能力基于本地 Ollama 运行，零 API 费用
-- **混合提取与规则自学习** - AI 提取 → 生成选择器 → 优先使用选择器 → 失败回退 AI
-- **页面结构自动适应** - DOM 相似度检测，自动识别网站改版并更新规则
+- **🤖 自主爬取 Agent** - 给定目标与种子 URL，Agent 用原生 tool-calling 自主规划爬哪些页、跟随链接、判断何时停止、提取并汇总成报告，全程 SSE 实时流式可视化（对标 Firecrawl / browser-use）
+- **⚡ 并发爬取引擎** - 异步抓取 + 共享连接池 + 信号量限流 + 退避重试 + 缓存；支持批量 URL 与整站 BFS（相比旧串行实现数量级提速）
+- **多 Provider LLM 支持** - DeepSeek / OpenAI / Qwen / Ollama，一处配置，处处可用；async + tool-calling + 流式
 - **采集与分析一体化** - 内置 RAG 语义检索和自然语言问答
-- **本地验证码破解** - 支持文字/滑块/点选验证码
-- **现代化前端界面** - React + TypeScript 赛博朋克暗色主题
+- **🪶 精简基础设施** - Embedding 走本地 fastembed（ONNX/CPU，无需 Ollama），向量库用本地 FAISS（无需 Docker/Qdrant），只依赖 Redis + MongoDB
+- **🎨 高级感前端** - React + TypeScript + shadcn 风格组件 + Linear/Vercel 近无彩黑白灰设计 + 明暗双主题（默认暗色）+ ECharts
 
 ## 技术栈
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
-| 前端 | React 18 + TypeScript + Vite | 现代化 SPA 应用 |
-| 前端样式 | Tailwind CSS | 赛博朋克暗色主题 |
-| 状态管理 | Zustand | 轻量级响应式状态 |
-| 路由 | React Router v6 | 客户端路由 |
-| 图表 | Recharts | 监控数据可视化 |
+| 前端框架 | React 18 + TypeScript + Vite | 现代化 SPA 应用 |
+| 前端样式 | Tailwind CSS + shadcn 风格组件 | Linear 风近无彩设计 token + 明暗双主题 |
+| 图表 | ECharts | 监控数据可视化（适配暗色） |
+| 状态管理 | Zustand (persist) | 轻量级响应式状态 + 主题持久化 |
+| 路由 | React Router v7 | 客户端路由 |
+| 通知/数据 | sonner + TanStack Query | 全局通知 + 服务端状态 |
 | 后端 API | FastAPI | Python 异步 Web 框架 |
-| 爬虫框架 | Scrapy + Scrapy-Redis | 分布式爬虫 |
-| JS 渲染 | Crawl4AI | 异步 JS 渲染引擎 |
-| 本地 LLM | Ollama (qwen2:7b-instruct) | 主力语言模型 |
-| 多模态 | qwen2.5-vl:3b-instruct | 验证码识别 |
-| 嵌入模型 | nomic-embed-text | 文本向量化 |
-| AI 框架 | LangChain | LLM 编排 |
-| 消息队列 | Redis | 分布式队列/缓存/锁 |
-| 数据库 | MongoDB | 文档数据存储 |
-| 向量存储 | FAISS | 语义检索向量索引 |
-| 部署 | Docker Compose | 一键部署 |
+| 爬取引擎 | httpx (async) + asyncio | 并发抓取 + 连接池 + 信号量 + 重试 |
+| Agent | 原生 tool-calling（OpenAI 兼容） | 自主多步爬取，无需 LangChain/LangGraph |
+| JS 渲染 | Crawl4AI（可选） | 异步浏览器池，按需启动 |
+| 主力 LLM | DeepSeek-V3 | 便宜、中文强、JSON 输出稳定 |
+| Embedding | fastembed (本地 ONNX) | bge-m3，CPU 即可，无需 Ollama |
+| 缓存/锁 | Redis | 提取缓存 / SSE |
+| 数据库 | MongoDB | 任务状态、聊天记录、Agent 运行 |
+| 向量存储 | FAISS (本地) | 语义检索向量索引 |
 
 ## 环境要求
 
@@ -38,92 +37,91 @@
 - Python 3.11+
 - Redis 7+
 - MongoDB 7+
-- Ollama (含 qwen2:7b-instruct, nomic-embed-text 模型)
+
+> 无需 Qdrant、Ollama、Docker。
 
 ## 项目结构
 
 ```
 Nexus Intelligence Agent/
-├── frontend/                     # React 前端
+├── frontend/                         # React 前端
 │   ├── src/
-│   │   ├── api/client.ts         # API 客户端 (fetch 封装)
+│   │   ├── api/client.ts             # API 客户端 (REST + SSE)
 │   │   ├── components/
-│   │   │   ├── Layout.tsx        # 侧边栏布局
-│   │   │   └── StatusBadge.tsx   # 状态徽章组件
+│   │   │   ├── Layout.tsx            # 侧边栏 + 暗色切换
+│   │   │   ├── ErrorBoundary.tsx     # 错误边界
+│   │   │   └── ui/                   # shadcn 风格组件 (Button/Card/Input/Badge/Skeleton/EmptyState)
 │   │   ├── pages/
-│   │   │   ├── CrawlPage.tsx     # 零配置抓取
-│   │   │   ├── QueryPage.tsx     # 语义问答
-│   │   │   ├── DataPage.tsx      # 数据浏览
-│   │   │   ├── MonitorPage.tsx   # 任务监控
-│   │   │   └── SettingsPage.tsx  # 系统设置
-│   │   ├── store/index.ts        # Zustand 状态管理
-│   │   ├── types/index.ts        # TypeScript 类型定义
-│   │   ├── App.tsx               # 主应用 (路由配置)
-│   │   ├── main.tsx              # 入口
-│   │   └── index.css             # 全局样式 (赛博朋克主题)
-│   ├── public/                   # 静态资源
-│   ├── index.html                # Vite 入口
-│   ├── package.json              # Node.js 依赖
-│   ├── vite.config.ts            # Vite 配置 (含 API 代理)
-│   ├── tsconfig.json             # TypeScript 配置
-│   ├── tailwind.config.js        # Tailwind CSS 主题
-│   ├── postcss.config.js         # PostCSS 配置
-│   └── eslint.config.js          # ESLint 配置
+│   │   │   ├── AgentPage.tsx         # 🤖 自主 Agent 控制台 (首页, 核心)
+│   │   │   ├── CrawlPage.tsx         # 批量 / 整站爬取 (SSE 实时进度)
+│   │   │   ├── QueryPage.tsx         # 语义问答 (Markdown 答案)
+│   │   │   ├── DataPage.tsx          # 数据浏览
+│   │   │   ├── MonitorPage.tsx       # 任务监控 (ECharts, 适配暗色)
+│   │   │   └── SettingsPage.tsx      # 系统设置
+│   │   ├── lib/utils.ts              # cn() 等工具
+│   │   ├── store/index.ts            # Zustand (含主题持久化)
+│   │   ├── types/index.ts            # TypeScript 类型定义
+│   │   ├── App.tsx                   # 路由 + 错误边界
+│   │   ├── main.tsx                  # 入口 (QueryClient + Toaster + 主题)
+│   │   └── index.css                 # 设计 token + 全局样式
+│   ├── package.json
+│   ├── vite.config.ts
+│   └── tsconfig.json
 │
-├── backend/                      # Python 后端
+├── backend/                          # Python 后端
 │   ├── nia/
-│   │   ├── api/                  # FastAPI 后端 API
-│   │   │   ├── app.py            # 主应用 (CORS + 路由注册)
-│   │   │   ├── crawl.py          # POST /api/crawl, GET /api/crawl/results
-│   │   │   ├── query.py          # POST /api/query, GET /api/query/history
-│   │   │   ├── data.py           # GET /api/data (分页+搜索)
-│   │   │   ├── monitor.py        # GET /api/monitor/stats, /domains, /alert
-│   │   │   └── settings.py       # GET /api/settings/config, /status
-│   │   ├── ai/                   # AI 核心模块
-│   │   │   ├── ollama_client.py  # Ollama 客户端 (LLM + VL + 嵌入)
-│   │   │   ├── json_parser.py    # 健壮 JSON 解析器 (含 LLM 自修正)
-│   │   │   ├── extraction_pipeline.py # AI 提取管道
-│   │   │   ├── rule_learner.py   # 规则自学习
-│   │   │   └── dom_detector.py   # DOM 结构变化检测
-│   │   ├── storage/              # 存储模块 (MongoDB)
-│   │   │   ├── database.py       # DatabaseManager (连接池 + 索引)
-│   │   │   ├── models.py         # 数据模型 (6 个 dataclass)
-│   │   │   └── data_version.py   # 数据版本控制
-│   │   ├── rag/                  # RAG 系统 (FAISS)
-│   │   │   ├── embedding.py      # 嵌入管理器
-│   │   │   ├── vector_store.py   # FAISS 向量存储
-│   │   │   └── rag_engine.py     # RAG 引擎
-│   │   ├── spiders/              # Scrapy 爬虫
-│   │   │   ├── base_spider.py    # 基础爬虫
-│   │   │   └── smart_spider.py   # 智能爬虫
-│   │   ├── captcha/              # 验证码破解
-│   │   ├── scheduler/            # 任务调度 (Redis)
-│   │   ├── monitoring/           # 监控报告
-│   │   ├── utils/                # 工具模块
-│   │   ├── middlewares.py        # 防反爬中间件
-│   │   ├── items.py              # Scrapy Item 定义
-│   │   ├── pipelines.py          # 数据处理管道
-│   │   └── settings.py           # Scrapy 设置
-│   ├── pyproject.toml            # Python 项目配置
-│   ├── requirements.txt          # Python 依赖
-│   ├── scrapy.cfg                # Scrapy 配置
-│   └── .env                      # 环境变量
+│   │   ├── api/                      # FastAPI 后端 API
+│   │   │   ├── app.py                # 主应用 (CORS + 路由 + lifespan)
+│   │   │   ├── agent.py              # 🤖 自主 Agent API (启动 / SSE / 取消)
+│   │   │   ├── crawl.py              # 单 URL + 批量/整站爬取 API
+│   │   │   ├── query.py              # 问答 API
+│   │   │   ├── data.py / monitor.py / settings.py
+│   │   │   ├── ── 以下为业务模块 ──
+│   │   ├── agent/                    # 🤖 自主爬取 Agent
+│   │   │   ├── agent.py              # tool-calling 主循环 (async generator)
+│   │   │   ├── tools.py              # 工具集 + 预算拦截
+│   │   │   ├── state.py / events.py / prompts.py
+│   │   ├── crawler/                  # ⚡ 并发爬取引擎
+│   │   │   ├── engine.py             # BFS 整站 / 批量编排
+│   │   │   ├── fetcher.py            # 共享 AsyncClient + 信号量 + 重试
+│   │   │   ├── frontier.py           # BFS 队列 + 去重 + 预算
+│   │   │   ├── parser.py / cache.py / extractor.py / browser_pool.py / models.py
+│   │   ├── ai/
+│   │   │   ├── llm_client.py         # LLM 客户端 (同步 + async + tool-calling + 流式)
+│   │   │   └── json_parser.py        # 健壮 JSON 解析器
+│   │   ├── rag/
+│   │   │   ├── embedding.py          # 嵌入管理器 (fastembed 本地 ONNX)
+│   │   │   ├── vector_store.py       # 向量存储 (FAISS)
+│   │   │   └── rag_engine.py         # RAG 引擎
+│   │   ├── storage/                  # database.py (MongoDB) + models.py
+│   │   ├── captcha/                  # 验证码识别 (ddddocr, 可选)
+│   │   ├── monitoring/               # 监控报告
+│   │   └── utils/                    # config.py / url_safety.py / crawl4ai_engine.py
+│   ├── requirements.txt              # Python 依赖
+│   ├── verify.py                     # 后端自检脚本
+│   └── .env.example                  # 环境变量模板
 │
-├── Dockerfile                    # Docker 镜像
-├── docker-compose.yml            # 一键部署
-├── .gitignore
-├── README.md
-└── 运行步骤.md
+├── README.md                         # 项目说明
+└── 运行步骤.md                        # 运行指南
 ```
 
 ## API 接口
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | /api/crawl | 提交抓取任务 |
-| GET | /api/crawl/results | 获取抓取结果列表 |
+| POST | /api/agent | 启动自主爬取 Agent（目标 + 种子 URL + 预算） |
+| GET | /api/agent/{run_id}/stream | SSE 实时 Agent 事件流（思考/动作/观察/发现/报告） |
+| POST | /api/agent/{run_id}/cancel | 取消 Agent（协作式收尾） |
+| GET | /api/agent | 最近的 Agent 运行记录 |
+| POST | /api/crawl | 提交单 URL 爬取任务（异步） |
+| POST | /api/crawl/batch | 并发批量 / 整站爬取 |
+| GET | /api/crawl/batch/{task_id}/stream | SSE 批量爬取进度 |
+| GET | /api/crawl/{task_id}/progress | SSE 单任务进度推送 |
+| GET | /api/crawl/results | 获取爬取结果列表 |
+| DELETE | /api/crawl/{task_id} | 删除任务 |
 | POST | /api/query | 语义问答 |
 | GET | /api/query/history | 获取问答历史 |
+| DELETE | /api/query/history | 清空聊天记录 |
 | GET | /api/data | 分页浏览爬取数据 |
 | GET | /api/monitor/stats | 任务统计指标 |
 | GET | /api/monitor/domains | 域名分布统计 |
@@ -136,307 +134,132 @@ Nexus Intelligence Agent/
 
 | 集合名 | 说明 | 索引 |
 |--------|------|------|
+| agent_runs | 自主 Agent 运行记录 | run_id (unique), created_at |
+| crawled_data | 爬取数据 | url, domain, created_at |
+| crawl_tasks | 任务状态 | task_id (unique), status, created_at |
+| chat_history | 聊天记录 | created_at, role |
 | websites | 网站信息 | domain |
 | extraction_rules | 提取规则 (XPath/CSS) | website_id |
-| crawled_data | 爬取数据 | url, domain, created_at |
-| vector_data | 向量元数据 (实际向量在 FAISS) | crawled_data_id |
-| data_versions | 数据版本控制 | crawled_data_id |
+| vector_data | 向量元数据 | crawled_data_id |
 | task_logs | 任务日志 | url, domain, created_at |
 
 ## 快速开始
 
-### 1. 安装 Ollama 和模型
+### 1. 注册 DeepSeek API
 
-```bash
-ollama pull qwen2:7b-instruct
-ollama pull qwen2.5-vl:3b
-ollama pull nomic-embed-text
-```
+前往 [DeepSeek Platform](https://platform.deepseek.com/) 注册并获取 API Key。
 
-### 2. 安装 Redis
+### 2. 向量存储
+
+默认使用本地 FAISS，**无需安装任何额外服务**。
+
+### 3. 安装 Redis
 
 ```bash
 winget install Redis.Redis
 redis-server
 ```
 
-### 3. 安装 MongoDB
+### 4. 安装 MongoDB
 
 ```bash
 winget install MongoDB.Server
 mongod --dbpath D:\MongoDB\data
 ```
 
-### 4. 安装 Python 依赖
+### 5. Embedding 模型
+
+默认使用 fastembed（本地 ONNX），首次运行会**自动下载** bge-m3 并缓存，无需手动安装 Ollama。
+
+### 6. 安装 Python 依赖
 
 ```bash
 cd "D:\Nexus Intelligence Agent\backend"
-pip install -e .
+pip install -r requirements.txt
 ```
 
-### 5. 安装 Node.js 依赖
+### 7. 安装 Node.js 依赖
 
 ```bash
 cd "D:\Nexus Intelligence Agent\frontend"
 npm install
 ```
 
-### 6. 配置环境变量
+### 8. 配置环境变量
 
 ```bash
 cd "D:\Nexus Intelligence Agent\backend"
 copy .env.example .env
 ```
 
-### 7. 初始化数据库
+编辑 `.env` 文件，填入你的 DeepSeek API Key：
+
+```env
+LLM_PROVIDER=deepseek
+DEEPSEEK_API_KEY=your-deepseek-api-key
+```
+
+### 9. 初始化数据库
 
 ```bash
 cd "D:\Nexus Intelligence Agent\backend"
 python -c "from nia.storage.database import DatabaseManager; db = DatabaseManager(); db.init_db(); print('OK')"
 ```
 
-### 8. 启动
+### 10. 启动
+
+确保 Redis 与 MongoDB 已在运行，然后：
 
 ```bash
-# 终端1: 启动后端 API
+# 终端1: 启动后端 API（用 JS 渲染时请去掉 --reload，避免反复重启浏览器）
 cd "D:\Nexus Intelligence Agent\backend"
-uvicorn nia.api.app:app --reload --host 0.0.0.0 --port 8000
+uvicorn nia.api.app:app --host 0.0.0.0 --port 8000
 
 # 终端2: 启动前端
 cd "D:\Nexus Intelligence Agent\frontend"
 npm run dev
 ```
 
-浏览器访问: http://localhost:5173
+浏览器访问 http://localhost:5173 ，首页即「🤖 自主 Agent」控制台。
 
-## 常见问题
-
-### ModuleNotFoundError: No module named 'nia'
-
-```bash
-cd "D:\Nexus Intelligence Agent\backend"
-pip install -e .
-```
-
-### FastAPI 未安装
-
-```bash
-pip install fastapi uvicorn
-```
-
-### nest_asyncio 未安装
-
-```bash
-pip install nest-asyncio
-```
-
-### Ollama 连接失败
-
-```bash
-ollama serve
-```
-
-### Ollama 模型不显示
-
-设置模型目录环境变量：
-
-```powershell
-[System.Environment]::SetEnvironmentVariable("OLLAMA_MODELS", "D:\Ollama\Models", "User")
-```
-
-然后重启 Ollama。
-
-### Redis 连接失败
-
-```bash
-redis-server
-```
-
-### MongoDB 连接失败
-
-```bash
-mongod --dbpath D:\MongoDB\data
-```
+> 💡 启动前可先运行 `python verify.py` 做后端自检（语法 / 导入 / 依赖）。
 
 ## 更新日志
 
-### 2026-06-01 — 爬取流程修复与项目重构
+### 2026-06-07 — UI 高级化改版
 
-**核心修复**
+- **设计语言**：切换为 Linear/Vercel 风**近无彩黑白灰**——近黑背景 + 顶部柔光晕、1px 细边框分层、收紧字距；主按钮在暗色为近白、浅色为近黑
+- **默认暗色主题**，明暗一键切换并持久化
+- **交互**：按钮加入按压物理感（按下回缩 + 悬停微浮 + 辉光）；启动按钮即时 loading 反馈
+- **稳定性修复**：`<html lang>` 改 `zh-CN` + `notranslate`，并去掉流式列表的 framer-motion，根治网页翻译/动画引发的 React `insertBefore` 报错
 
-1. **nia/api/crawl.py** — 重写爬取 API，让爬取真正执行
-   - 移除无效的 Redis 队列调度（原来只入队不执行）
-   - 新增完整爬取流程：crawl4ai 抓取 → AI 提取 → MongoDB 存储 → FAISS 索引
-   - 支持 JS 渲染模式（动态网页）
-   - 前端提交任务后可轮询结果
+### 2026-06-07 — v2.0 激进重构
 
-**项目结构重组**
+**核心**
 
-2. **目录结构调整** — 前后端分离
-   - `frontend/` — React 前端（src, public, package.json, vite.config.ts 等）
-   - `backend/` — Python 后端（nia/, pyproject.toml, requirements.txt 等）
-   - 根目录只保留 Docker、README 等公共文件
+- **🤖 新增自主爬取 Agent**：原生 tool-calling（OpenAI 兼容，DeepSeek）多步循环，给定目标自主规划爬取、跟随链接、判断停止、提取汇总；全程 SSE 实时事件流（思考/动作/观察/发现/报告）。`backend/nia/agent/` + `POST /api/agent`
+- **⚡ 并发爬取引擎** `backend/nia/crawler/`：共享 `httpx.AsyncClient` + 信号量限流 + 退避重试 + Redis 缓存 + BFS frontier；支持批量 URL 与整站爬取（`POST /api/crawl/batch`），相比旧串行实现数量级提速
+- **LLMClient 升级**：新增 async / 原生 tool-calling / 退避重试 / 流式，保留同步接口
 
-3. **配置文件更新**
-   - `README.md` — 更新项目结构、启动命令路径
-   - `运行步骤.md` — 更新所有 cd 路径
-   - `Dockerfile` — COPY 路径改为 backend/
-   - `docker-compose.yml` — build.context 改为 ./backend
-   - `.gitignore` — 适配新结构
+**精简基础设施**
 
-**已知问题**
+- Embedding：Ollama bge-m3 → **本地 fastembed**（ONNX/CPU，无需 Ollama）
+- 向量库：Qdrant → **本地 FAISS**（无需 Docker）
+- 只依赖 **Redis + MongoDB**；依赖大幅瘦身（移除 scrapy / scrapy-redis / qdrant-client / langchain-ollama）
+- 删除死代码：`pipelines.py`、`rule_learner.py`（伪规则学习）、`extraction_pipeline.py`、`spiders/`、`scheduler/` 等
 
-- JS 渲染模式需要安装 Playwright：`playwright install chromium`
-- AI 提取速度取决于 Ollama 模型性能（qwen2:7b-instruct 约 30-60 秒）
+**前端翻新**
 
-### 2026-05-23 — 全面代码审查与修复
+- 设计系统：HSL 设计 token + **明暗双主题**（持久化）+ shadcn 风格组件库（`components/ui/`）
+- 新增 **Agent 控制台页**（首页）：实时活动时间线 + 发现侧栏 + 预算进度 + Markdown 报告
+- 翻新 5 页：批量/整站爬取、Markdown 问答、可搜索数据表、暗色图表监控、设置
+- 接入 framer-motion（动画）、sonner（通知）、TanStack Query、react-markdown
 
-**Python 后端修复 (10 项)**
+**修复**
 
-1. **nia/api/crawl.py** — Redis 异常处理增强
-   - 添加 try/except 包装 Redis 读写操作，捕获 `redis.RedisError`、`json.JSONDecodeError` 和 `TypeError`
-   - 写入结果前增加 `isinstance(results, list)` 类型检查，防止损坏数据污染缓存
-   - 添加结构化日志记录 (logger)，记录所有 Redis 操作失败
-   - 影响范围：POST /api/crawl、GET /api/crawl/results
+- 修复 `crawl.py` SSE 首屏 `_tasks[task]` 拼写 bug；修复 `chunk_text` 潜在死循环
 
-2. **nia/api/query.py** — Redis 异常处理增强
-   - 添加 try/except 包装聊天历史的 Redis 读写操作
-   - 写入前增加 list 类型验证
-   - 添加结构化日志记录
-   - 影响范围：POST /api/query、GET /api/query/history
+### 2026-06-06 — v1 全面重构（历史）
 
-3. **nia/api/data.py** — MongoDB 异常处理增强
-   - 整个数据库查询逻辑包装在 try/except `PyMongoError` 中
-   - `doc.pop("_id")` 增加 `TypeError`/`AttributeError` 捕获
-   - 数据库异常时返回空数据集而非崩溃
-   - 影响范围：GET /api/data
-
-4. **nia/api/monitor.py** — API 响应格式修复
-   - 修复 `/stats` 端点：统一字段名为前端期望的 `total_tasks`、`queue_pending`、`avg_llm_time`
-   - 修复 `/domains` 端点：返回 `{"domains": [...]}` 包装格式而非裸数组
-   - 影响范围：GET /api/monitor/stats、GET /api/monitor/domains
-
-5. **nia/api/settings.py** — API 响应格式修复
-   - 修复 `/config` 端点：返回 `{"config": {...}}` 包装格式
-   - 影响范围：GET /api/settings/config
-
-6. **nia/ai/ollama_client.py** — JSON 解析错误日志
-   - `extract_json()`、`check_dom_change()`、`extract_with_instruction()` 中的 `json.JSONDecodeError` 静默失败改为 warning 级别日志
-   - 日志包含 LLM 响应的前 300 字符预览，便于诊断 AI 输出异常
-   - 影响范围：AI 提取管道、DOM 检测、规则学习
-
-7. **nia/ai/json_parser.py** — LLM 自校正错误信息增强
-   - `_llm_self_correct()` 的 `ValueError` 增加 LLM 校正响应的前 300 字符预览
-   - 便于定位 LLM 输出导致解析失败的根本原因
-   - 影响范围：AI 提取管道的 JSON 解析链路
-
-8. **nia/rag/vector_store.py** — 数据结构验证
-   - `_load_index()` 增加 metadata list 类型验证
-   - 增加 index 向量数量与 metadata 条目数量的交叉验证 (ntotal vs len)
-   - 数据不一致时自动重建索引并记录 warning
-   - `Exception` 捕获改为具体日志记录
-   - 影响范围：FAISS 向量存储的索引加载与持久化
-
-9. **nia/storage/database.py** — 连接管理优化
-   - `connect()` 增加幂等检查，重复调用不创建新连接
-   - `MongoClient` 增加 `serverSelectionTimeoutMS=5000` 和 `connectTimeoutMS=5000`
-   - `get_collection()` 增加 `self._db` 空值检查，自动触发 `connect()`
-   - `init_db()` 中索引创建增加 `ConnectionFailure` 异常捕获
-   - 影响范围：MongoDB 连接管理全模块
-
-10. **nia/pipelines.py** — 分布式锁防御 + 错误日志增强
-    - `process_item()` 增加 `distributed_lock is not None` 检查，避免 Redis 未启动时崩溃
-    - `_store_data()` 错误日志增加 item 键名预览，便于定位数据结构异常
-    - 影响范围：Scrapy 数据处理管道
-
-**Python 后端 — 语法修复**
-
-11. **nia/middlewares.py** — BOM 字符修复
-    - 移除文件开头的 UTF-8 BOM (U+FEFF) 字符，修复 `SyntaxError: invalid non-printable character`
-    - 增加 `request.headers is None` 防御性检查
-    - 影响范围：Scrapy 反反爬中间件
-
-12. **nia/spiders/__init__.py** — BOM 字符修复
-    - 移除文件开头的双重 UTF-8 BOM (U+FEFF) 字符
-    - 影响范围：爬虫包初始化
-
-**React 前端修复 (7 项)**
-
-13. **src/api/client.ts** — API 路由匹配修复
-    - 修复 `getConfig()` 路径：`/config` → `/settings/config`
-    - 修复 `getServiceStatus()` 路径：`/services/status` → `/settings/status`
-    - `request()` 增加 HTTP 错误响应体输出，便于调试
-    - 增加空响应 (null/undefined) 检查，抛出明确错误信息
-    - 影响范围：设置页面、服务状态面板
-
-14. **vite.config.ts** — 开发服务器 API 代理
-    - 增加 `server.proxy` 配置，将 `/api` 请求代理到 `http://127.0.0.1:8000`
-    - 前端开发时无需 CORS 配置即可调用后端 API
-    - 影响范围：开发环境 API 调用
-
-15. **tsconfig.json** — TypeScript 严格模式增强
-    - 启用 `noUnusedLocals: true` — 未使用局部变量报错
-    - 启用 `noUnusedParameters: true` — 未使用参数报错
-    - 启用 `noFallthroughCasesInSwitch: true` — switch 穿透报错
-    - 启用 `noUncheckedSideEffectImports: true` — 副作用导入检查
-    - 启用 `noUncheckedIndexedAccess: true` — 索引访问可空检查
-    - 启用 `forceConsistentCasingInFileNames: true` — 文件名大小写一致
-    - 影响范围：全前端 TypeScript 类型检查
-
-16. **pyproject.toml** — 依赖更新
-     - 新增 `fastapi>=0.109.0`、`uvicorn>=0.25.0`、`nest-asyncio>=1.6.0`
-     - 移除已弃用的 `streamlit>=1.30.0`、`flask>=3.0.0`
-     - 影响范围：Python 包依赖声明
-
-17. **src/pages/DataPage.tsx** — ESLint 警告修复
-    - useEffect 依赖数组补充 `fetchData`，消除 `react-hooks/exhaustive-deps` 警告
-    - 影响范围：数据浏览页面的搜索+分页逻辑
-
-**测试结果**
-
-| 测试项 | 结果 | 详情 |
-|--------|------|------|
-| TypeScript 类型检查 | ✅ 通过 | tsc --noEmit 零错误（含 noUncheckedIndexedAccess 等 6 项严格选项） |
-| Python 语法检查 | ✅ 通过 | 47 个文件全部通过编译检查 |
-| Python 核心模块导入 | ✅ 通过 | config, database, ollama_client, json_parser, vector_store |
-| Vite 生产构建 | ✅ 通过 | 2300 modules, 46.6s, dist 产出正常 |
-| ESLint 代码规范 | ✅ 通过 | 0 errors, 0 warnings |
-| API 路由映射一致性 | ✅ 通过 | 前端 client.ts 路径与后端路由完全匹配 |
-| 前后端字段名一致性 | ✅ 通过 | monitor/stats, query/history, crawl/results, settings/config |
-
-### 2026-05-23 — 运行时测试与修复
-
-**新增修复**
-
-18. **nia/api/query.py** — RAG 查询异常处理
-    - POST `/api/query` 增加 try/except 包装 `rag_engine.query()`
-    - Ollama 模型不可用时（如 nomic-embed-text 未安装）返回 200 + 友好错误信息，而非 500 Internal Server Error
-    - 错误信息引导用户检查 Ollama 服务和模型安装状态
-    - 影响范围：语义问答 API
-
-**运行时测试结果**
-
-| 测试项 | 结果 | 详情 |
-|--------|------|------|
-| 依赖安装 | ✅ | fastapi, crawl4ai 已通过 pip 安装 |
-| .env 配置 | ✅ | 从 .env.example 自动创建 |
-| FastAPI 启动 | ✅ | uvicorn 运行在 http://127.0.0.1:8000 |
-| Vite 启动 | ✅ | 启动 3806ms, 运行在 http://127.0.0.1:5173 |
-| API 代理 | ✅ | Vite proxy 正确转发 /api → 8000 |
-| POST /api/crawl | ✅ | 返回 task_id + queued 状态 |
-| POST /api/query | ✅ | nomic-embed-text 未安装时返回 200 + 指导信息 |
-| GET /api/health | ✅ | {"status": "ok"} |
-| GET /api/settings/config | ✅ | {"config": {...}} 格式正确 |
-| GET /api/settings/status | ✅ | Redis ✅ MongoDB ✅ Ollama ✅ |
-| GET /api/crawl/results | ✅ | {"results": []} |
-| GET /api/query/history | ✅ | {"history": []} |
-| GET /api/data | ✅ | 分页+搜索正常 |
-| GET /api/monitor/stats | ✅ | 字段名与前端 Match |
-| GET /api/monitor/domains | ✅ | {"domains": []} |
-| GET /api/monitor/alert | ✅ | {"alert": null} |
-| 前端页面渲染 | ✅ | 200 OK, HTML 正常返回 |
-
-**已知待处理项**
-
-- `nomic-embed-text` 模型未安装：需执行 `ollama pull nomic-embed-text` 下载嵌入模型后，RAG 语义问答功能才可正常使用
-- Ollama 模型列表为空：Ollama 的 `/api/tags` 返回的 models 数组为空，需要确认模型迁移后服务是否正确加载模型
+- 异步爬取 + SSE 实时进度；聊天记录存 MongoDB；URL 安全校验防 SSRF
+- 前端：Recharts → ECharts，赛博朋克暗色 → 明亮主题，新增错误边界

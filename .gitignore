@@ -40,7 +40,12 @@ pnpm-debug.log*
 
 # Auto-generated data
 nia/_data/
+backend/nia/_data/
 faiss_index/
+
+# Backend self-check / diagnostic scripts (本地用, 可不入库)
+# backend/verify.py
+# backend/diag_agent.py
 
 # Scrapy
 .scrapy/
