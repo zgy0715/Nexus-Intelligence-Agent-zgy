@@ -1,60 +1,44 @@
-import { useState, useEffect } from 'react';
-import { Settings, RefreshCw, Server } from 'lucide-react';
-import { api } from '@/api/client';
-import type { ServiceStatus } from '@/types';
+/**
+ * 系统设置页面 — 配置展示 + 服务状态
+ */
 
-function StatusBadge({ connected }: { connected: boolean }) {
-  return (
-    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${
-      connected ? 'bg-[#00ffa3]/10 text-[#00ffa3]' : 'bg-[#ef4444]/10 text-[#ef4444]'
-    }`}>
-      <span className={`h-1.5 w-1.5 rounded-full ${connected ? 'bg-[#00ffa3]' : 'bg-[#ef4444]'}`} />
-      {connected ? '已连接' : '未连接'}
-    </span>
-  );
-}
+import { useState, useEffect, useRef } from "react";
+import { Settings, RefreshCw, Cpu, Database } from "lucide-react";
+import { api } from "@/api/client";
+import type { ServiceStatus } from "@/types";
+import { Card } from "@/components/ui/Card";
+import { Badge } from "@/components/ui/Badge";
+import { Button } from "@/components/ui/Button";
+import { Skeleton } from "@/components/ui/Skeleton";
 
-function ServiceCard({ name, status }: { name: string; status: { connected: boolean; version?: string } }) {
+function ServiceCard({
+  name,
+  icon: Icon,
+  status,
+  extra,
+}: {
+  name: string;
+  icon: React.ElementType;
+  status: { connected: boolean; version?: string };
+  extra?: React.ReactNode;
+}) {
   return (
-    <div className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-5">
+    <Card className="p-5">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Server size={18} className="text-[#3b82f6]" />
-          <span className="font-medium text-white">{name}</span>
-        </div>
-        <StatusBadge connected={status.connected} />
-      </div>
-      {status.version && (
-        <p className="mt-2 text-xs text-gray-500">版本: {status.version}</p>
-      )}
-    </div>
-  );
-}
-
-function OllamaServiceCard({ name, status }: { name: string; status: ServiceStatus['ollama'] }) {
-  return (
-    <div className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-5">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <Server size={18} className="text-[#3b82f6]" />
-          <span className="font-medium text-white">{name}</span>
-        </div>
-        <StatusBadge connected={status.connected} />
-      </div>
-      {status.version && (
-        <p className="mt-2 text-xs text-gray-500">版本: {status.version}</p>
-      )}
-      {status.models && status.models.length > 0 && (
-        <div className="mt-3 border-t border-[#1e1e2e] pt-3">
-          <p className="mb-1.5 text-xs text-gray-500">可用模型</p>
-          <div className="flex flex-wrap gap-1.5">
-            {status.models.map((m) => (
-              <span key={m} className="rounded bg-[#1e1e2e] px-2 py-0.5 text-xs text-[#00ffa3]">{m}</span>
-            ))}
+          <div className="rounded-lg bg-secondary p-2">
+            <Icon size={16} className="text-muted-foreground" />
           </div>
+          <span className="font-medium text-foreground">{name}</span>
         </div>
-      )}
-    </div>
+        <Badge variant={status.connected ? "success" : "destructive"}>
+          <span className={`h-1.5 w-1.5 rounded-full ${status.connected ? "bg-success" : "bg-destructive"}`} />
+          {status.connected ? "已连接" : "未连接"}
+        </Badge>
+      </div>
+      {status.version && <p className="mt-2 text-xs text-muted-foreground">版本: {status.version}</p>}
+      {extra}
+    </Card>
   );
 }
 
@@ -63,17 +47,29 @@ export default function SettingsPage() {
   const [services, setServices] = useState<ServiceStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const loadData = async () => {
     try {
       const [c, s] = await Promise.all([api.getConfig(), api.getServiceStatus()]);
-      setConfig(c.config);
-      setServices(s);
-    } catch (_e) {
-      console.error(_e);
+      if (mountedRef.current) {
+        setConfig(c.config);
+        setServices(s);
+      }
+    } catch {
+      /* ignore */
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (mountedRef.current) {
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
   };
 
@@ -87,57 +83,97 @@ export default function SettingsPage() {
   };
 
   if (loading) {
-    return <div className="flex h-full items-center justify-center text-gray-500">加载中...</div>;
+    return (
+      <div className="mx-auto max-w-4xl space-y-6 p-6">
+        <Skeleton className="h-10 w-48" />
+        <div className="grid gap-4 md:grid-cols-3">
+          {Array.from({ length: 3 }).map((_, i) => (
+            <Skeleton key={i} className="h-20" />
+          ))}
+        </div>
+        <div className="space-y-3">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-32" />
+          ))}
+        </div>
+      </div>
+    );
   }
+
+  const configGroups: Record<string, [string, string][]> = {
+    "LLM 配置": Object.entries(config).filter(
+      ([k]) => k.includes("LLM") || k.includes("DEEPSEEK") || k.includes("OPENAI") || k.includes("QWEN") || k.includes("OLLAMA"),
+    ),
+    "Embedding 配置": Object.entries(config).filter(([k]) => k.includes("EMBED")),
+    向量存储: Object.entries(config).filter(([k]) => k.includes("VECTOR") || k.includes("QDRANT") || k.includes("FAISS")),
+    基础设施: Object.entries(config).filter(([k]) => k.includes("REDIS") || k.includes("MONGO")),
+    "爬取 / Agent": Object.entries(config).filter(([k]) => k.includes("CRAWL") || k.includes("AGENT")),
+    "AI 参数": Object.entries(config).filter(([k]) => k.includes("CACHE") || k.includes("THRESHOLD") || k.includes("LOG")),
+  };
 
   return (
     <div className="mx-auto max-w-4xl space-y-6 p-6">
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Settings className="text-[#00ffa3]" size={28} />
-          <h1 className="text-2xl font-bold text-white">系统设置</h1>
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
+            <Settings className="text-primary-foreground" size={22} />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-foreground">系统设置</h1>
+            <p className="text-xs text-muted-foreground">查看配置和服务状态</p>
+          </div>
         </div>
-        <button
-          onClick={handleRefresh}
-          disabled={refreshing}
-          className="flex items-center gap-2 rounded-md border border-[#1e1e2e] px-3 py-2 text-sm text-gray-400 transition hover:border-[#00ffa3] hover:text-[#00ffa3] disabled:opacity-40"
-        >
-          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-          刷新
-        </button>
-      </div>
-
-      <div className="rounded-lg border border-[#1e1e2e] bg-[#111118]">
-        <div className="border-b border-[#1e1e2e] px-5 py-3">
-          <h2 className="text-sm font-medium text-gray-300">配置项</h2>
-        </div>
-        {Object.keys(config).length === 0 ? (
-          <p className="px-5 py-6 text-center text-sm text-gray-600">暂无配置</p>
-        ) : (
-          <table className="w-full text-sm">
-            <tbody>
-              {Object.entries(config).map(([key, value], i) => (
-                <tr key={key} className={`border-b border-[#1e1e2e] last:border-0 ${i % 2 === 1 ? 'bg-[#0d0d14]' : ''}`}>
-                  <td className="px-5 py-2.5 font-mono text-[#00ffa3]">{key}</td>
-                  <td className="px-5 py-2.5 text-gray-400">{value}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        )}
+        <Button variant="outline" size="sm" onClick={handleRefresh} disabled={refreshing}>
+          <RefreshCw size={14} className={refreshing ? "animate-spin" : ""} /> 刷新
+        </Button>
       </div>
 
       <div>
-        <h2 className="mb-3 text-sm font-medium text-gray-300">服务状态</h2>
-        <div className="grid gap-4 md:grid-cols-3">
+        <h2 className="mb-3 text-sm font-semibold text-muted-foreground">服务状态</h2>
+        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
           {services && (
             <>
-              <ServiceCard name="Redis" status={services.redis} />
-              <ServiceCard name="MongoDB" status={services.mongodb} />
-              <OllamaServiceCard name="Ollama" status={services.ollama} />
+              <ServiceCard name="Redis" icon={Database} status={services.redis} />
+              <ServiceCard name="MongoDB" icon={Database} status={services.mongodb} />
+              {services.llm_provider && (
+                <ServiceCard
+                  name={services.llm_provider.provider || "LLM"}
+                  icon={Cpu}
+                  status={services.llm_provider}
+                  extra={
+                    services.llm_provider.model && (
+                      <p className="mt-2 text-xs text-muted-foreground">模型: {services.llm_provider.model}</p>
+                    )
+                  }
+                />
+              )}
             </>
           )}
         </div>
+      </div>
+
+      <div className="space-y-4">
+        <h2 className="text-sm font-semibold text-muted-foreground">配置详情</h2>
+        {Object.entries(configGroups).map(
+          ([group, entries]) =>
+            entries.length > 0 && (
+              <Card key={group} className="overflow-hidden">
+                <div className="border-b border-border bg-secondary/50 px-5 py-3">
+                  <h3 className="text-xs font-medium text-muted-foreground">{group}</h3>
+                </div>
+                <table className="w-full text-sm">
+                  <tbody>
+                    {entries.map(([key, value]) => (
+                      <tr key={key} className="border-b border-border last:border-0">
+                        <td className="px-5 py-2.5 font-mono text-xs text-primary">{key}</td>
+                        <td className="px-5 py-2.5 text-xs text-muted-foreground">{value}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </Card>
+            ),
+        )}
       </div>
     </div>
   );

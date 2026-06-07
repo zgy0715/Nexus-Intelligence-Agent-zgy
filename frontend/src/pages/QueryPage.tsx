@@ -1,134 +1,203 @@
-import { useState, useEffect, useRef } from 'react';
-import { MessageSquare, Send, Loader2, ChevronDown, ChevronUp } from 'lucide-react';
-import { api } from '@/api/client';
-import { useStore } from '@/store';
-import type { ChatMessage, Source } from '@/types';
+/**
+ * 语义问答页面 — 聊天式交互 + 来源引用 + Markdown 答案
+ */
+
+import { useState, useEffect, useRef } from "react";
+import { MessageSquare, Send, Trash2 } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import { toast } from "sonner";
+import { api } from "@/api/client";
+import { useStore } from "@/store";
+import type { ChatMessage, Source } from "@/types";
+import { Button } from "@/components/ui/Button";
+import { Input } from "@/components/ui/Input";
+import { Skeleton } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { cn, timeAgo } from "@/lib/utils";
+
+const EXAMPLE_QUESTIONS = [
+  "这些网站主要讲了什么？",
+  "总结一下最近爬取的内容要点",
+  "有哪些和 AI 相关的信息？",
+];
 
 function SourceList({ sources }: { sources: Source[] }) {
-  const [open, setOpen] = useState(false);
   if (!sources || sources.length === 0) return null;
   return (
-    <div className="mt-2">
-      <button
-        onClick={() => setOpen(!open)}
-        className="flex items-center gap-1 text-xs text-[#3b82f6] hover:underline"
-      >
-        来源引用 ({sources.length})
-        {open ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
-      </button>
-      {open && (
-        <div className="mt-2 space-y-1">
-          {sources.map((s, i) => (
-            <a
-              key={i}
-              href={s.url}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="block truncate rounded px-2 py-1 text-xs text-[#3b82f6] hover:bg-[#1e1e2e]"
-            >
-              {s.title || s.url}
-            </a>
-          ))}
-        </div>
-      )}
+    <div className="mt-2 border-t border-border pt-2">
+      <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">来源引用</p>
+      {sources.map((s, i) => (
+        <a
+          key={`${s.url}-${i}`}
+          href={s.url}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="block truncate py-0.5 text-xs text-primary hover:underline"
+        >
+          [{i + 1}] {s.title || s.url}
+        </a>
+      ))}
     </div>
   );
 }
 
 function MessageBubble({ msg }: { msg: ChatMessage }) {
-  const isUser = msg.role === 'user';
+  const isUser = msg.role === "user";
   return (
-    <div className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}>
+    <div className={cn("flex", isUser ? "justify-end" : "justify-start")}>
       <div
-        className={`max-w-[75%] rounded-lg px-4 py-2.5 text-sm ${
-          isUser ? 'bg-[#3b82f6] text-white' : 'border border-[#1e1e2e] bg-[#111118] text-gray-300'
-        }`}
+        className={cn(
+          "max-w-[80%] rounded-2xl px-4 py-3 text-sm leading-relaxed shadow-sm",
+          isUser
+            ? "rounded-br-md bg-primary text-primary-foreground"
+            : "rounded-bl-md border border-border bg-card text-card-foreground",
+        )}
       >
-        <p className="whitespace-pre-wrap">{msg.content}</p>
+        {isUser ? (
+          <p className="whitespace-pre-wrap">{msg.content}</p>
+        ) : (
+          <div className="markdown">
+            <ReactMarkdown>{msg.content}</ReactMarkdown>
+          </div>
+        )}
         {!isUser && msg.sources && <SourceList sources={msg.sources} />}
+        {(msg.created_at || msg.timestamp) && (
+          <div className={cn("mt-1.5 text-[10px]", isUser ? "text-primary-foreground/70" : "text-muted-foreground")}>
+            {timeAgo(msg.created_at || msg.timestamp)}
+          </div>
+        )}
       </div>
     </div>
   );
 }
 
 export default function QueryPage() {
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState("");
   const [sending, setSending] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(true);
   const chatHistory = useStore((s) => s.chatHistory);
   const setChatHistory = useStore((s) => s.setChatHistory);
   const addChatMessage = useStore((s) => s.addChatMessage);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const mountedRef = useRef(true);
 
   useEffect(() => {
-    api.getQueryHistory().then((res) => setChatHistory(res.history)).catch(() => {});
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoadingHistory(true);
+    api
+      .getQueryHistory()
+      .then((res) => {
+        if (!cancelled && mountedRef.current) setChatHistory(res.history);
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (!cancelled && mountedRef.current) setLoadingHistory(false);
+      });
+    return () => {
+      cancelled = true;
+    };
   }, [setChatHistory]);
 
   useEffect(() => {
-    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [chatHistory]);
 
-  const handleSend = async () => {
-    const question = input.trim();
+  const send = async (text?: string) => {
+    const question = (text ?? input).trim();
     if (!question || sending) return;
-    setInput('');
+    setInput("");
     setSending(true);
-    const userMsg: ChatMessage = {
-      id: crypto.randomUUID(),
-      role: 'user',
-      content: question,
-      timestamp: new Date().toISOString(),
-    };
-    addChatMessage(userMsg);
+    addChatMessage({ role: "user", content: question });
     try {
       const res = await api.query(question);
-      addChatMessage({
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: res.answer,
-        sources: res.sources,
-        timestamp: new Date().toISOString(),
-      });
+      if (mountedRef.current)
+        addChatMessage({ role: "assistant", content: res.answer, sources: res.sources });
     } catch {
-      addChatMessage({
-        id: crypto.randomUUID(),
-        role: 'assistant',
-        content: '抱歉，查询过程中出现错误，请稍后重试。',
-        timestamp: new Date().toISOString(),
-      });
+      if (mountedRef.current)
+        addChatMessage({ role: "assistant", content: "抱歉，查询过程中出现错误，请稍后重试。" });
     } finally {
-      setSending(false);
+      if (mountedRef.current) setSending(false);
     }
   };
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault();
-      handleSend();
+  const handleClear = async () => {
+    try {
+      await api.clearChatHistory();
+      if (mountedRef.current) setChatHistory([]);
+      toast.success("聊天记录已清空");
+    } catch {
+      toast.error("清空失败");
     }
   };
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-3 border-b border-[#1e1e2e] px-6 py-4">
-        <MessageSquare className="text-[#00ffa3]" size={24} />
-        <h1 className="text-xl font-bold text-white">语义问答</h1>
+      {/* 标题栏 */}
+      <div className="flex items-center justify-between border-b border-border bg-card px-6 py-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary">
+            <MessageSquare className="text-primary-foreground" size={20} />
+          </div>
+          <div>
+            <h1 className="text-lg font-bold text-foreground">语义问答</h1>
+            <p className="text-xs text-muted-foreground">基于已爬取数据的智能问答</p>
+          </div>
+        </div>
+        {chatHistory.length > 0 && (
+          <Button variant="outline" size="sm" onClick={handleClear}>
+            <Trash2 size={14} /> 清空
+          </Button>
+        )}
       </div>
 
+      {/* 聊天区域 */}
       <div className="flex-1 overflow-y-auto px-6 py-4">
-        {chatHistory.length === 0 ? (
-          <div className="flex h-full items-center justify-center">
-            <p className="text-gray-600">输入问题开始对话</p>
-          </div>
-        ) : (
+        {loadingHistory ? (
           <div className="space-y-4">
-            {chatHistory.map((msg) => (
-              <MessageBubble key={msg.id} msg={msg} />
+            <Skeleton className="ml-auto h-16 w-2/3" />
+            <Skeleton className="h-24 w-3/4" />
+            <Skeleton className="ml-auto h-12 w-1/2" />
+          </div>
+        ) : chatHistory.length === 0 ? (
+          <EmptyState
+            icon={MessageSquare}
+            title="开始提问"
+            description="基于已爬取的数据进行语义问答。试试下面的示例问题："
+            action={
+              <div className="flex flex-wrap justify-center gap-2">
+                {EXAMPLE_QUESTIONS.map((q) => (
+                  <button
+                    key={q}
+                    onClick={() => send(q)}
+                    className="rounded-full bg-secondary px-3 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground"
+                  >
+                    {q}
+                  </button>
+                ))}
+              </div>
+            }
+          />
+        ) : (
+          <div className="mx-auto max-w-3xl space-y-4">
+            {chatHistory.map((msg, i) => (
+              <MessageBubble key={msg.created_at || msg.timestamp || i} msg={msg} />
             ))}
             {sending && (
               <div className="flex justify-start">
-                <div className="flex items-center gap-2 rounded-lg border border-[#1e1e2e] bg-[#111118] px-4 py-3 text-sm text-gray-500">
-                  <Loader2 size={14} className="animate-spin" />
-                  思考中...
+                <div className="flex items-center gap-2 rounded-2xl rounded-bl-md border border-border bg-card px-4 py-3 text-sm text-muted-foreground shadow-sm">
+                  <span className="flex gap-1">
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.3s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:-0.15s]" />
+                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+                  </span>
+                  思考中…
                 </div>
               </div>
             )}
@@ -137,22 +206,24 @@ export default function QueryPage() {
         )}
       </div>
 
-      <div className="border-t border-[#1e1e2e] px-6 py-4">
-        <div className="flex gap-3">
-          <input
+      {/* 输入框 */}
+      <div className="border-t border-border bg-card px-6 py-4">
+        <div className="mx-auto flex max-w-3xl gap-3">
+          <Input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="输入你的问题..."
-            className="flex-1 rounded-md border border-[#1e1e2e] bg-[#0a0a0f] px-4 py-2.5 text-sm text-white placeholder-gray-500 outline-none transition focus:border-[#00ffa3] focus:shadow-[0_0_8px_rgba(0,255,163,0.3)]"
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                send();
+              }
+            }}
+            placeholder="输入你的问题…"
+            className="h-11"
           />
-          <button
-            onClick={handleSend}
-            disabled={sending || !input.trim()}
-            className="flex items-center gap-2 rounded-md bg-[#00ffa3] px-5 py-2.5 text-sm font-semibold text-black transition hover:shadow-[0_0_16px_rgba(0,255,163,0.4)] disabled:cursor-not-allowed disabled:opacity-40"
-          >
+          <Button size="lg" onClick={() => send()} loading={sending} disabled={!input.trim()}>
             <Send size={16} />
-          </button>
+          </Button>
         </div>
       </div>
     </div>

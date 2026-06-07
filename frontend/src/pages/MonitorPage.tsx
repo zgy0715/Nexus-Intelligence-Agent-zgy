@@ -1,28 +1,115 @@
-import { useState, useEffect, useCallback } from 'react';
-import { Activity, ListChecks, TrendingUp, Cpu, Clock, Inbox, AlertTriangle } from 'lucide-react';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer } from 'recharts';
-import { api } from '@/api/client';
-import type { MonitorStats } from '@/types';
+/**
+ * 监控面板 — 实时指标 + 域名分布图表 (ECharts，适配暗色)
+ */
+
+import { useState, useEffect, useCallback, useRef } from "react";
+import {
+  Activity,
+  ListChecks,
+  TrendingUp,
+  Cpu,
+  Clock,
+  Inbox,
+  AlertTriangle,
+  RefreshCw,
+} from "lucide-react";
+import * as echarts from "echarts";
+import { api } from "@/api/client";
+import { useStore } from "@/store";
+import type { MonitorStats } from "@/types";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { Skeleton } from "@/components/ui/Skeleton";
 
 interface DomainStat {
   domain: string;
   count: number;
 }
 
-function MetricCard({ icon: Icon, label, value, color }: { icon: React.ElementType; label: string; value: string | number; color: string }) {
+function MetricCard({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: React.ElementType;
+  label: string;
+  value: string | number;
+}) {
   return (
-    <div className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-4">
+    <Card className="p-4">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-2xl font-bold text-white">{value}</p>
-          <p className="mt-1 text-xs text-gray-500">{label}</p>
+          <p className="text-2xl font-bold text-foreground">{value}</p>
+          <p className="mt-1 text-xs text-muted-foreground">{label}</p>
         </div>
-        <div className={`rounded-lg p-2.5 ${color}`}>
-          <Icon size={20} />
+        <div className="rounded-xl bg-accent p-2.5 text-accent-foreground">
+          <Icon size={18} />
         </div>
       </div>
-    </div>
+    </Card>
   );
+}
+
+function BarChart({ data, dark }: { data: DomainStat[]; dark: boolean }) {
+  const chartRef = useRef<HTMLDivElement>(null);
+  const instanceRef = useRef<echarts.ECharts | null>(null);
+
+  useEffect(() => {
+    if (!chartRef.current) return;
+    instanceRef.current = echarts.init(chartRef.current);
+    const handleResize = () => instanceRef.current?.resize();
+    window.addEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      instanceRef.current?.dispose();
+      instanceRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const chart = instanceRef.current;
+    if (!chart || data.length === 0) return;
+    const axisColor = dark ? "#475569" : "#e5e7eb";
+    const labelColor = dark ? "#94a3b8" : "#9ca3af";
+    const splitColor = dark ? "#1e293b" : "#f3f4f6";
+    chart.setOption({
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: dark ? "#1e293b" : "#fff",
+        borderColor: axisColor,
+        textStyle: { color: dark ? "#e2e8f0" : "#374151", fontSize: 12 },
+      },
+      grid: { left: "3%", right: "4%", bottom: "3%", containLabel: true },
+      xAxis: {
+        type: "category",
+        data: data.map((d) => d.domain),
+        axisLine: { lineStyle: { color: axisColor } },
+        axisLabel: { color: labelColor, fontSize: 11 },
+      },
+      yAxis: {
+        type: "value",
+        axisLine: { show: false },
+        splitLine: { lineStyle: { color: splitColor } },
+        axisLabel: { color: labelColor, fontSize: 11 },
+      },
+      series: [
+        {
+          type: "bar",
+          data: data.map((d) => d.count),
+          itemStyle: {
+            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+              { offset: 0, color: "#6366f1" },
+              { offset: 1, color: "#818cf8" },
+            ]),
+            borderRadius: [6, 6, 0, 0],
+          },
+          barWidth: "50%",
+        },
+      ],
+    });
+  }, [data, dark]);
+
+  return <div ref={chartRef} style={{ height: 280, width: "100%" }} />;
 }
 
 export default function MonitorPage() {
@@ -30,17 +117,31 @@ export default function MonitorPage() {
   const [domains, setDomains] = useState<DomainStat[]>([]);
   const [alert, setAlert] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const mountedRef = useRef(true);
+  const dark = useStore((s) => s.theme === "dark");
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const loadAll = useCallback(async () => {
     try {
-      const [s, d, a] = await Promise.all([api.getMonitorStats(), api.getMonitorDomains(), api.getMonitorAlert()]);
+      const [s, d, a] = await Promise.all([
+        api.getMonitorStats(),
+        api.getMonitorDomains(),
+        api.getMonitorAlert(),
+      ]);
+      if (!mountedRef.current) return;
       setStats(s);
       setDomains(d.domains);
       setAlert(a.alert);
-    } catch (_e) {
-      console.error(_e);
+    } catch {
+      /* ignore */
     } finally {
-      setLoading(false);
+      if (mountedRef.current) setLoading(false);
     }
   }, []);
 
@@ -52,59 +153,71 @@ export default function MonitorPage() {
 
   if (loading) {
     return (
-      <div className="flex h-full items-center justify-center text-gray-500">加载中...</div>
+      <div className="mx-auto max-w-5xl space-y-6 p-6">
+        <Skeleton className="h-10 w-48" />
+        <Skeleton className="h-12 w-full" />
+        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-24" />
+          ))}
+        </div>
+        <Skeleton className="h-72 w-full" />
+      </div>
     );
   }
 
   return (
     <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <div className="flex items-center gap-3">
-        <Activity className="text-[#00ffa3]" size={28} />
-        <h1 className="text-2xl font-bold text-white">任务监控</h1>
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
+            <Activity className="text-primary-foreground" size={22} />
+          </div>
+          <div>
+            <h1 className="text-xl font-bold text-foreground">任务监控</h1>
+            <p className="text-xs text-muted-foreground">系统运行状态和任务统计</p>
+          </div>
+        </div>
+        <Button variant="outline" size="sm" onClick={loadAll}>
+          <RefreshCw size={14} /> 刷新
+        </Button>
       </div>
 
       {alert ? (
-        <div className="flex items-center gap-2 rounded-lg border border-[#ef4444]/30 bg-[#ef4444]/10 px-4 py-3 text-sm text-[#ef4444]">
+        <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           <AlertTriangle size={16} />
           {alert}
         </div>
       ) : (
-        <div className="flex items-center gap-2 rounded-lg border border-[#00ffa3]/30 bg-[#00ffa3]/10 px-4 py-3 text-sm text-[#00ffa3]">
+        <div className="flex items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
           <Activity size={16} />
           系统运行正常
         </div>
       )}
 
       <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <MetricCard icon={ListChecks} label="总任务数" value={stats?.total_tasks ?? '-'} color="bg-[#3b82f6]/10 text-[#3b82f6]" />
-        <MetricCard icon={TrendingUp} label="成功率" value={stats ? `${stats.success_rate}%` : '-'} color="bg-[#00ffa3]/10 text-[#00ffa3]" />
-        <MetricCard icon={Cpu} label="LLM调用次数" value={stats?.llm_calls ?? '-'} color="bg-[#f59e0b]/10 text-[#f59e0b]" />
-        <MetricCard icon={Clock} label="平均LLM耗时" value={stats ? `${stats.avg_llm_time}ms` : '-'} color="bg-[#a855f7]/10 text-[#a855f7]" />
+        <MetricCard icon={ListChecks} label="总任务数" value={stats?.total_tasks ?? "-"} />
+        <MetricCard icon={TrendingUp} label="成功率" value={stats != null ? `${stats.success_rate}%` : "-"} />
+        <MetricCard icon={Cpu} label="LLM 调用" value={stats?.llm_calls ?? "-"} />
+        <MetricCard icon={Clock} label="平均耗时" value={stats != null ? `${stats.avg_llm_time}ms` : "-"} />
       </div>
 
       <div className="grid grid-cols-2 gap-4">
-        <MetricCard icon={Inbox} label="队列中待抓取" value={stats?.queue_pending ?? '-'} color="bg-[#3b82f6]/10 text-[#3b82f6]" />
-        <MetricCard icon={AlertTriangle} label="死信队列" value={stats?.dead_letter_count ?? '-'} color="bg-[#ef4444]/10 text-[#ef4444]" />
+        <MetricCard icon={Inbox} label="队列待处理" value={stats?.queue_pending ?? "-"} />
+        <MetricCard icon={AlertTriangle} label="失败任务" value={stats?.dead_letter_count ?? "-"} />
       </div>
 
-      <div className="rounded-lg border border-[#1e1e2e] bg-[#111118] p-5">
-        <h2 className="mb-4 text-sm font-medium text-gray-400">域名分布</h2>
+      <Card className="p-5">
+        <h2 className="mb-4 text-sm font-medium text-muted-foreground">域名分布</h2>
         {domains.length === 0 ? (
-          <p className="py-8 text-center text-sm text-gray-600">暂无数据</p>
+          <div className="py-12 text-center">
+            <Activity size={24} className="mx-auto mb-2 text-muted-foreground/40" />
+            <p className="text-sm text-muted-foreground">暂无数据</p>
+          </div>
         ) : (
-          <ResponsiveContainer width="100%" height={280}>
-            <BarChart data={domains}>
-              <XAxis dataKey="domain" tick={{ fill: '#6b7280', fontSize: 11 }} axisLine={{ stroke: '#1e1e2e' }} />
-              <YAxis tick={{ fill: '#6b7280', fontSize: 11 }} axisLine={{ stroke: '#1e1e2e' }} />
-              <Tooltip
-                contentStyle={{ background: '#111118', border: '1px solid #1e1e2e', borderRadius: 8, fontSize: 12 }}
-                labelStyle={{ color: '#9ca3af' }}
-              />
-              <Bar dataKey="count" fill="#00ffa3" radius={[4, 4, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+          <BarChart data={domains} dark={dark} />
         )}
-      </div>
+      </Card>
     </div>
   );
 }
