@@ -13,10 +13,16 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 async def get_config():
     return {
         "config": {
-            "OLLAMA_BASE_URL": Config.OLLAMA_BASE_URL,
+            "LLM_PROVIDER": Config.LLM_PROVIDER.value,
+            "DEEPSEEK_LLM_MODEL": Config.DEEPSEEK_LLM_MODEL,
+            "OPENAI_LLM_MODEL": Config.OPENAI_LLM_MODEL,
+            "QWEN_LLM_MODEL": Config.QWEN_LLM_MODEL,
             "OLLAMA_LLM_MODEL": Config.OLLAMA_LLM_MODEL,
-            "OLLAMA_VL_MODEL": Config.OLLAMA_VL_MODEL,
-            "OLLAMA_EMBED_MODEL": Config.OLLAMA_EMBED_MODEL,
+            "EMBED_PROVIDER": Config.EMBED_PROVIDER,
+            "EMBED_MODEL": Config.EMBED_MODEL,
+            "VECTOR_STORE": Config.VECTOR_STORE,
+            "QDRANT_URL": Config.QDRANT_URL,
+            "QDRANT_COLLECTION": Config.QDRANT_COLLECTION,
             "REDIS_URL": Config.REDIS_URL,
             "MONGO_URL": Config.MONGO_URL,
             "MONGO_DB": Config.MONGO_DB,
@@ -24,6 +30,7 @@ async def get_config():
             "AI_CACHE_DAYS": Config.AI_CACHE_DAYS,
             "EXTRACTION_FAILURE_THRESHOLD": Config.EXTRACTION_FAILURE_THRESHOLD,
             "DOM_SIMILARITY_THRESHOLD": Config.DOM_SIMILARITY_THRESHOLD,
+            "RAG_THRESHOLD": Config.RAG_THRESHOLD,
         }
     }
 
@@ -49,18 +56,28 @@ async def get_service_status():
     except Exception:
         pass
 
-    ollama_status = {"connected": False}
+    llm_status = {"connected": False, "provider": Config.LLM_PROVIDER.value, "model": Config.DEEPSEEK_LLM_MODEL}
     try:
-        resp = req.get(f"{Config.OLLAMA_BASE_URL}/api/tags", timeout=5)
-        if resp.status_code == 200:
-            models = resp.json().get("models", [])
-            model_names = [m.get("name") for m in models]
-            ollama_status = {"connected": True, "models": model_names}
+        if Config.LLM_PROVIDER.value == "deepseek":
+            # 测试 DeepSeek API 连接
+            resp = req.get(
+                f"{Config.DEEPSEEK_BASE_URL}/models",
+                headers={"Authorization": f"Bearer {Config.DEEPSEEK_API_KEY}"},
+                timeout=5,
+            )
+            if resp.status_code == 200:
+                llm_status["connected"] = True
+        elif Config.LLM_PROVIDER.value == "ollama":
+            resp = req.get(f"{Config.OLLAMA_BASE_URL}/api/tags", timeout=5)
+            if resp.status_code == 200:
+                models = resp.json().get("models", [])
+                llm_status["connected"] = True
+                llm_status["models"] = [m.get("name") for m in models]
     except Exception:
         pass
 
     return {
         "redis": redis_status,
         "mongodb": mongodb_status,
-        "ollama": ollama_status,
+        "llm_provider": llm_status,
     }

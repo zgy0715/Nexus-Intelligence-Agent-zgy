@@ -1,4 +1,5 @@
 import asyncio
+import threading
 
 import nest_asyncio
 from crawl4ai import AsyncWebCrawler
@@ -8,11 +9,14 @@ nest_asyncio.apply()
 
 class Crawl4AIEngine:
     _instance = None
+    _lock = threading.Lock()
 
     @classmethod
     def get_instance(cls, headless=True, verbose=False):
         if cls._instance is None:
-            cls._instance = cls(headless=headless, verbose=verbose)
+            with cls._lock:
+                if cls._instance is None:
+                    cls._instance = cls(headless=headless, verbose=verbose)
         return cls._instance
 
     def __init__(self, headless=True, verbose=False):

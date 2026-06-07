@@ -35,7 +35,7 @@ class DailyReport:
         today = datetime.date.today()
         start = datetime.datetime.combine(today, datetime.time.min)
         end = datetime.datetime.combine(today + datetime.timedelta(days=1), datetime.time.min)
-        col = self.db.get_collection("task_logs")
+        col = self.db.get_collection("crawl_tasks")
         try:
             pipeline = [
                 {
@@ -49,7 +49,7 @@ class DailyReport:
                         "total": {"$sum": 1},
                         "success_count": {
                             "$sum": {
-                                "$cond": [{"$eq": ["$status", "success"]}, 1, 0]
+                                "$cond": [{"$eq": ["$status", "completed"]}, 1, 0]
                             }
                         },
                         "avg_llm_calls": {"$avg": "$llm_calls"},

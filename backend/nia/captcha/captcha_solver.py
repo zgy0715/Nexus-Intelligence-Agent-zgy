@@ -1,3 +1,10 @@
+"""
+验证码识别模块 — 支持文字/滑块/点选三种验证码
+
+⚠️ 注意：此模块已实现但尚未接入任何 API 或爬取流程。
+如需启用，在 crawl.py 的 _do_crawl 中合适位置调用 CaptchaSolver。
+"""
+
 import base64
 import hashlib
 import json
@@ -5,13 +12,13 @@ import json
 import ddddocr
 import redis
 
-from nia.ai.ollama_client import OllamaClient
+from nia.ai.llm_client import LLMClient
 from nia.utils.config import Config
 
 
 class CaptchaSolver:
     def __init__(self):
-        self.ollama = OllamaClient()
+        self.llm = LLMClient()
         self.ocr = ddddocr.DdddOcr(show_ad=False)
         self.redis = redis.from_url(Config.REDIS_URL, decode_responses=True)
 
@@ -37,7 +44,7 @@ class CaptchaSolver:
             "这是滑块验证码的背景图和滑块图。请判断滑块在背景图上应该滑动到的x轴偏移位置（像素）。"
             "背景图：<image>，滑块图：<image>。只返回x偏移量的数字，不要其他内容。"
         )
-        response = self.ollama.chat_with_vision(prompt, [bg_b64, slider_b64])
+        response = self.llm.chat_with_vision(prompt, [bg_b64, slider_b64])
         try:
             x_offset = int("".join(c for c in response if c.isdigit()))
         except (ValueError, TypeError):
@@ -51,7 +58,7 @@ class CaptchaSolver:
             "请返回需要点击的位置坐标，格式为JSON数组，每个元素包含x和y。"
             '例如：[{"x": 100, "y": 50}]。只返回JSON，不要其他内容。'
         )
-        response = self.ollama.chat_with_vision(prompt, [image_b64])
+        response = self.llm.chat_with_vision(prompt, [image_b64])
         try:
             clean = response.strip()
             if "```" in clean:
@@ -66,7 +73,7 @@ class CaptchaSolver:
 
     def _solve_with_vl(self, image_bytes: bytes, prompt: str) -> str:
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        response = self.ollama.chat_with_vision(prompt, [image_b64])
+        response = self.llm.chat_with_vision(prompt, [image_b64])
         return response.strip()
 
     def _solve_with_ddddocr(self, image_bytes: bytes) -> str:
