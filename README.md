@@ -1,5 +1,18 @@
 # Nexus Intelligence Agent (NIA)
 
+[![React](https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react&logoColor=white)](https://reactjs.org/)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Vite](https://img.shields.io/badge/Vite-6.4-646CFF?style=flat&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-06B6D4?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
+[![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io/)
+[![MongoDB](https://img.shields.io/badge/MongoDB-7-47A248?style=flat&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![ECharts](https://img.shields.io/badge/ECharts-5.5-AA344D?style=flat&logo=apacheecharts&logoColor=white)](https://echarts.apache.org/)
+[![Zustand](https://img.shields.io/badge/Zustand-5.0-333?style=flat)](https://zustand-demo.pmnd.rs/)
+[![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat&logo=node.js&logoColor=white)](https://nodejs.org/)
+[![DeepSeek](https://img.shields.io/badge/DeepSeek-V3-4D6BFE?style=flat)](https://platform.deepseek.com/)
+
 下一代智能网络爬虫与情报分析系统 —— 基于 DeepSeek 的**自主爬取 Agent** + 并发爬取引擎，精简到只需 Redis + MongoDB。
 
 ## 核心特性
