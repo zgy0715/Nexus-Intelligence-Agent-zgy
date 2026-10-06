@@ -2,49 +2,29 @@
 智能问答 API — RAG 检索 + 普通聊天 自动切换
 """
 
+import asyncio
 import logging
-from datetime import datetime
+import time
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
 from pymongo.errors import PyMongoError
 
 from nia.utils.config import Config
+from nia.utils.timeutil import utcnow
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/query", tags=["query"])
-
-# 延迟初始化
-_rag_engine = None
-_llm_client = None
-
-
-def _get_rag_engine():
-    global _rag_engine
-    if _rag_engine is None:
-        from nia.rag.rag_engine import RAGEngine
-        _rag_engine = RAGEngine()
-    return _rag_engine
-
-
-def _get_llm_client():
-    global _llm_client
-    if _llm_client is None:
-        from nia.ai.llm_client import LLMClient
-        _llm_client = LLMClient()
-    return _llm_client
-
 
 # ── 聊天历史配置 ─────────────────────────────────────────────────
 CHAT_HISTORY_MAX = 100
 
 
 def _get_db():
-    from nia.storage.database import DatabaseManager
-    db = DatabaseManager()
-    db.connect()
-    return db
+    from nia.storage.database import get_db
+
+    return get_db()
 
 
 class QueryRequest(BaseModel):
@@ -53,7 +33,7 @@ class QueryRequest(BaseModel):
     @field_validator("question")
     @classmethod
     def validate_question(cls, v: str) -> str:
-        v = v.strip()
+        v = (v or "").strip()
         if not v:
             raise ValueError("问题不能为空")
         if len(v) > 2000:
@@ -61,99 +41,169 @@ class QueryRequest(BaseModel):
         return v
 
 
-@router.post("")
-async def query_smart(req: QueryRequest):
-    """智能问答：先尝试 RAG 检索，无结果则直接和 LLM 聊天"""
-    question = req.question
-    answer = ""
-    sources = []
+async def _run_sync(fn, *args):
+    """把阻塞调用（Mongo/pymongo、向量检索）挪出事件循环。"""
+    return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
 
-    # 第一步：尝试 RAG 检索
-    RAG_THRESHOLD = Config.RAG_THRESHOLD  # 相似度阈值，低于此值用普通聊天
-    try:
-        rag_result = _get_rag_engine().query(question)
-        rag_answer = rag_result.get("answer", "")
-        rag_sources = rag_result.get("sources", [])
-        relevance = rag_result.get("relevance", 0.0)
 
-        # 如果 RAG 搜到高相关内容，使用 RAG 回答
-        if rag_sources and relevance >= RAG_THRESHOLD:
-            answer = rag_answer
-            sources = rag_sources
-        else:
-            # 相关性不够，降级到普通聊天
-            raise Exception("low relevance")
-    except Exception:
-        # RAG 失败或无数据，使用普通 LLM 聊天
-        try:
-            from langchain_core.messages import HumanMessage, SystemMessage
-            llm = _get_llm_client()
-            messages = [
-                SystemMessage(content=(
-                    "你是一个智能助手。用中文回答用户的问题，回答要简洁准确。"
-                )),
-                HumanMessage(content=question),
-            ]
-            answer = llm.chat(messages, temperature=0.7)
-        except Exception as e:
-            logger.error(f"LLM chat failed: {e}")
-            answer = f"抱歉，暂时无法回答你的问题。错误信息：{str(e)[:200]}"
-
-    # 保存聊天记录到 MongoDB
-    try:
-        db = _get_db()
-        collection = db.get_collection("chat_history")
-
-        collection.insert_one({
-            "role": "user",
-            "content": question,
-            "created_at": datetime.utcnow().isoformat(),
-        })
-        collection.insert_one({
-            "role": "assistant",
-            "content": answer,
-            "sources": sources,
-            "created_at": datetime.utcnow().isoformat(),
-        })
-
-        # 限制总条数
+async def _save_history(question: str, answer: str, sources: list) -> None:
+    def _write():
+        collection = _get_db().get_collection("chat_history")
+        now = utcnow().isoformat()
+        collection.insert_many([
+            {"role": "user", "content": question, "created_at": now},
+            {"role": "assistant", "content": answer, "sources": sources, "created_at": now},
+        ])
         total = collection.count_documents({})
         if total > CHAT_HISTORY_MAX * 2:
             excess = total - CHAT_HISTORY_MAX * 2
-            oldest = collection.find().sort("created_at", 1).limit(excess)
-            oldest_ids = [doc["_id"] for doc in oldest]
-            collection.delete_many({"_id": {"$in": oldest_ids}})
+            oldest = collection.find({}, {"_id": 1}).sort("created_at", 1).limit(excess)
+            ids = [doc["_id"] for doc in oldest]
+            if ids:
+                collection.delete_many({"_id": {"$in": ids}})
 
+    try:
+        await _run_sync(_write)
     except PyMongoError as e:
         logger.warning(f"Failed to save chat history: {e}")
+    except Exception as e:
+        logger.warning(f"Failed to save chat history: {e}")
 
-    return {"answer": answer, "sources": sources}
+
+_rag_backoff_until = 0.0
+# RAG 检索超时/失败后的退避时长（秒）：退避期内直接走普通聊天，避免每次请求都干等
+RAG_BACKOFF_SECONDS = 300.0
+
+
+async def _try_rag(question: str) -> dict | None:
+    """尝试 RAG 检索。超时/失败/退避期内返回 None（调用方降级为普通聊天）。"""
+    global _rag_backoff_until
+    if time.monotonic() < _rag_backoff_until:
+        logger.debug("RAG 处于退避期，跳过检索")
+        return None
+    try:
+        from nia.rag.rag_engine import aget_rag_engine
+
+        async def _rag_answer(q: str) -> dict:
+            # 引擎构造（ONNX 模型加载）与检索都是阻塞调用，放进线程池执行
+            engine = await aget_rag_engine()
+            return await engine.aquery(q)
+
+        result = await asyncio.wait_for(
+            _rag_answer(question), timeout=max(5.0, Config.RAG_TIMEOUT)
+        )
+        _rag_backoff_until = 0.0
+        return result
+    except asyncio.TimeoutError:
+        _rag_backoff_until = time.monotonic() + RAG_BACKOFF_SECONDS
+        logger.warning(
+            f"RAG 检索超时（>{Config.RAG_TIMEOUT}s），{int(RAG_BACKOFF_SECONDS)}s 内跳过 RAG 直接聊天"
+        )
+        return None
+    except Exception as e:
+        # 检索管线本身出错（模型未下载/FAISS 损坏等）——记录下来，别静默吞掉
+        _rag_backoff_until = time.monotonic() + RAG_BACKOFF_SECONDS
+        logger.warning(f"RAG 检索失败，降级为普通聊天: {e}")
+        return None
+
+
+@router.post("")
+async def query_smart(req: QueryRequest):
+    """智能问答：先尝试 RAG 检索，相关性不足或检索不可用时降级为普通聊天。"""
+    question = req.question
+    answer = ""
+    sources: list = []
+    mode = "chat"
+    rag_ok = False
+
+    # 第一步：尝试 RAG 检索
+    rag_result = await _try_rag(question)
+    if rag_result:
+        relevance = float(rag_result.get("relevance") or 0.0)
+        rag_sources = rag_result.get("sources") or []
+        if rag_sources and relevance >= Config.RAG_THRESHOLD:
+            answer = rag_result.get("answer") or ""
+            sources = rag_sources
+            rag_ok = bool(answer.strip())
+            mode = "rag"
+        else:
+            logger.debug(
+                "RAG 相关性不足（relevance=%.3f < %.3f, sources=%d），降级为普通聊天",
+                relevance, Config.RAG_THRESHOLD, len(rag_sources),
+            )
+
+    # 第二步：降级为普通聊天
+    if not rag_ok:
+        try:
+            llm = _get_ai_client()
+            answer = await llm.achat(
+                [
+                    {"role": "system", "content": "你是一个智能助手。用中文回答用户的问题，回答要简洁准确。"},
+                    {"role": "user", "content": question},
+                ],
+                temperature=0.7,
+            )
+        except Exception as e:
+            logger.error(f"LLM chat failed: {e}")
+            answer = "抱歉，暂时无法回答你的问题（LLM 服务不可用）。"
+            mode = "error"
+
+    await _save_history(question, answer, sources)
+    return {"answer": answer, "sources": sources, "mode": mode}
+
+
+_ai_client = None
+
+
+def _get_ai_client():
+    """进程内共享的 LLM 客户端（连接池复用）。"""
+    global _ai_client
+    if _ai_client is None:
+        from nia.ai.llm_client import LLMClient
+
+        _ai_client = LLMClient()
+    return _ai_client
+
+
+def close_ai_client() -> None:
+    global _ai_client
+    if _ai_client is not None:
+        try:
+            _ai_client.close()
+        finally:
+            _ai_client = None
 
 
 @router.get("/history")
 async def get_chat_history(limit: int = Query(50, ge=1, le=200)):
-    """获取聊天历史（最新的 N 条）"""
-    try:
-        db = _get_db()
-        collection = db.get_collection("chat_history")
-        cursor = collection.find(
-            {}, {"_id": 0}
-        ).sort("created_at", -1).limit(limit * 2)  # *2 因为每轮有 user + assistant
+    """获取聊天历史（最新的 N 轮；每轮包含 user + assistant 两条）。"""
+    def _read():
+        cursor = (
+            _get_db().get_collection("chat_history")
+            .find({}, {"_id": 0})
+            .sort("created_at", -1)
+            .limit(limit * 2)
+        )
         messages = list(cursor)
         messages.reverse()  # 按时间正序
-        return {"history": messages}
+        return messages
+
+    try:
+        messages = await _run_sync(_read)
+        return {"history": messages, "count": len(messages)}
     except PyMongoError as e:
         logger.warning(f"Failed to read chat history: {e}")
-        return {"history": []}
+        return {"history": [], "count": 0}
 
 
 @router.delete("/history")
 async def clear_chat_history():
     """清空聊天历史"""
+    def _clear():
+        return _get_db().get_collection("chat_history").delete_many({}).deleted_count
+
     try:
-        db = _get_db()
-        collection = db.get_collection("chat_history")
-        collection.delete_many({})
-        return {"message": "聊天记录已清空"}
+        deleted = await _run_sync(_clear)
+        return {"message": "聊天记录已清空", "deleted": deleted}
     except PyMongoError as e:
         raise HTTPException(500, f"清空失败: {e}")

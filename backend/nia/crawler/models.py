@@ -25,6 +25,12 @@ class CrawlConfig:
     # httpx 正文过短时是否回退到 JS 渲染（启发式）
     js_fallback: bool = False
     js_fallback_min_chars: int = 500
+    # 单页最大响应体（字节）
+    max_content_bytes: int = field(default_factory=lambda: Config.CRAWL_MAX_CONTENT_BYTES)
+    # 单域名并发上限（礼貌抓取）
+    per_domain_concurrency: int = field(default_factory=lambda: Config.CRAWL_PER_DOMAIN_CONCURRENCY)
+    # 是否遵从 robots.txt
+    respect_robots: bool = field(default_factory=lambda: Config.CRAWL_RESPECT_ROBOTS)
 
 
 @dataclass
@@ -38,6 +44,10 @@ class FetchResult:
     from_cache: bool = False
     elapsed: float = 0.0
     rendered_js: bool = False
+    content_type: str = ""
+    truncated: bool = False
+    # 该 URL 是否被 robots.txt 禁止
+    blocked_by_robots: bool = False
 
 
 @dataclass

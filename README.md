@@ -39,7 +39,7 @@
 | Agent | 原生 tool-calling（OpenAI 兼容） | 自主多步爬取，无需 LangChain/LangGraph |
 | JS 渲染 | Crawl4AI（可选） | 异步浏览器池，按需启动 |
 | 主力 LLM | DeepSeek-V3 | 便宜、中文强、JSON 输出稳定 |
-| Embedding | fastembed (本地 ONNX) | bge-m3，CPU 即可，无需 Ollama |
+| Embedding | fastembed (本地 ONNX) | 默认 `BAAI/bge-small-zh-v1.5`（512 维，约 90MB），CPU 即可，无需 Ollama |
 | 缓存/锁 | Redis | 提取缓存 / SSE |
 | 数据库 | MongoDB | 任务状态、聊天记录、Agent 运行 |
 | 向量存储 | FAISS (本地) | 语义检索向量索引 |
@@ -48,10 +48,12 @@
 
 - Node.js 18+
 - Python 3.11+
-- Redis 7+
-- MongoDB 7+
+- Redis 7+（默认端口 **6379**，需自行启动）
+- MongoDB 7+（默认端口 **27017**，需自行启动）
 
 > 无需 Qdrant、Ollama、Docker。
+>
+> MongoDB 未启动时服务仍能启动，但爬取结果与问答历史无法持久化，`GET /api/monitor/stats` 会返回 `degraded: true`。
 
 ## 项目结构
 
@@ -99,9 +101,8 @@ Nexus Intelligence Agent/
 │   │   │   ├── fetcher.py            # 共享 AsyncClient + 信号量 + 重试
 │   │   │   ├── frontier.py           # BFS 队列 + 去重 + 预算
 │   │   │   ├── parser.py / cache.py / extractor.py / browser_pool.py / models.py
-│   │   ├── ai/
-│   │   │   ├── llm_client.py         # LLM 客户端 (同步 + async + tool-calling + 流式)
-│   │   │   └── json_parser.py        # 健壮 JSON 解析器
+│   │   │   └── robots.py             # robots.txt 解析与遵守策略
+│   │   ├── ai/                       # llm_client.py (同步 + async + tool-calling + 流式)
 │   │   ├── rag/
 │   │   │   ├── embedding.py          # 嵌入管理器 (fastembed 本地 ONNX)
 │   │   │   ├── vector_store.py       # 向量存储 (FAISS)
@@ -109,7 +110,7 @@ Nexus Intelligence Agent/
 │   │   ├── storage/                  # database.py (MongoDB) + models.py
 │   │   ├── captcha/                  # 验证码识别 (ddddocr, 可选)
 │   │   ├── monitoring/               # 监控报告
-│   │   └── utils/                    # config.py / url_safety.py / crawl4ai_engine.py
+│   │   └── utils/                    # config.py / url_safety.py / timeutil.py
 │   ├── requirements.txt              # Python 依赖
 │   ├── verify.py                     # 后端自检脚本
 │   └── .env.example                  # 环境变量模板
@@ -129,19 +130,28 @@ Nexus Intelligence Agent/
 | POST | /api/crawl | 提交单 URL 爬取任务（异步） |
 | POST | /api/crawl/batch | 并发批量 / 整站爬取 |
 | GET | /api/crawl/batch/{task_id}/stream | SSE 批量爬取进度 |
+| POST | /api/crawl/batch/{task_id}/cancel | 取消正在运行的批量爬取（SSE 收到 `{"event": "cancelled"}` 并以 `cancelled` 状态结束） |
 | GET | /api/crawl/{task_id}/progress | SSE 单任务进度推送 |
-| GET | /api/crawl/results | 获取爬取结果列表 |
+| GET | /api/crawl/results | 获取爬取结果列表（此前被 `/{task_id}` 路由遮蔽恒 404，现已修复） |
 | DELETE | /api/crawl/{task_id} | 删除任务 |
 | POST | /api/query | 语义问答 |
 | GET | /api/query/history | 获取问答历史 |
 | DELETE | /api/query/history | 清空聊天记录 |
-| GET | /api/data | 分页浏览爬取数据 |
+| GET | /api/data | 分页浏览爬取数据（**不含** `raw_html`） |
+| GET | /api/data/{data_id} | 单个爬取数据的完整文档（**含** `raw_html`） |
 | GET | /api/monitor/stats | 任务统计指标 |
-| GET | /api/monitor/domains | 域名分布统计 |
+| GET | /api/monitor/domains?days_ago=N | 域名分布统计（按 `crawled_data` 聚合真实域名） |
 | GET | /api/monitor/alert | 告警检查 |
 | GET | /api/settings/config | 系统配置 |
 | GET | /api/settings/status | 服务连接状态 |
-| GET | /api/health | 健康检查 |
+| GET | /api/health | 存活探针，返回 `{status, version}`（不探测外部依赖） |
+| GET | /api/ready | 就绪探针，返回 `{status, mongodb, redis}`，任一依赖不可用时 `status="degraded"` |
+
+> **并发上限**：批量爬取与 Agent 都有并发上限（`MAX_CONCURRENT_CRAWLS`，默认 4），超出时返回 HTTP 429。
+>
+> **`GET /api/agent/{run_id}`**：查询单次 Agent 运行状态。
+
+`GET /api/monitor/stats` 返回字段：`total_tasks`、`finished_tasks`、`success_rate`、`llm_calls`、`avg_llm_time_ms`、`avg_llm_time`（兼容旧字段）、`avg_crawl_time_ms`、`avg_llm_calls`、`queue_pending`、`dead_letter_count`、`error_summary`、`degraded`。
 
 ## MongoDB 集合
 
@@ -182,30 +192,39 @@ mongod --dbpath D:\MongoDB\data
 
 ### 5. Embedding 模型
 
-默认使用 fastembed（本地 ONNX），首次运行会**自动下载** bge-m3 并缓存，无需手动安装 Ollama。
+默认使用 fastembed（本地 ONNX，CPU 即可，无需 Ollama），默认模型 `BAAI/bge-small-zh-v1.5`（**512 维**，约 **90MB**）。首次使用需**联网下载** ONNX 模型，之后离线缓存可用。
+
+模型缓存目录由 `FASTEMBED_CACHE_DIR` 控制，默认 `./data/fastembed`（相对 `backend/`）。**必须保持非空**，否则 fastembed 会改用临时目录、进程退出即删除，导致每次启动都重新下载。
+
+> ⚠️ **fastembed 不支持 `BAAI/bge-m3`**（其内置模型列表中没有该 id）。想用 bge-m3 只能改走 `EMBED_PROVIDER=bge-m3`（需本地 Ollama + `pip install langchain-ollama`，可选功能）。
+>
+> 🌐 **国内网络**访问 `huggingface.co` 超时/失败时：设置 `HF_ENDPOINT=https://hf-mirror.com`；或手动下载模型后把 `EMBED_MODEL` 直接指向本地模型目录（例如 `EMBED_MODEL=./data/fastembed/bge-small-zh-v1.5`），此时可完全离线运行。
 
 ### 6. 安装 Python 依赖
 
+在项目根目录的 `backend` 目录下执行：
+
 ```bash
-cd "D:\Nexus Intelligence Agent\backend"
 pip install -r requirements.txt
 ```
 
 ### 7. 安装 Node.js 依赖
 
+在项目根目录的 `frontend` 目录下执行：
+
 ```bash
-cd "D:\Nexus Intelligence Agent\frontend"
 npm install
 ```
 
 ### 8. 配置环境变量
 
+环境变量模板位于 **`backend/.env.example`**（不在项目根目录）。在 `backend` 目录下复制为 `backend/.env`：
+
 ```bash
-cd "D:\Nexus Intelligence Agent\backend"
 copy .env.example .env
 ```
 
-编辑 `.env` 文件，填入你的 DeepSeek API Key：
+编辑 `backend/.env`，只需填入你的 DeepSeek API Key：
 
 ```env
 LLM_PROVIDER=deepseek
@@ -214,30 +233,61 @@ DEEPSEEK_API_KEY=your-deepseek-api-key
 
 ### 9. 初始化数据库
 
+在 `backend` 目录下执行：
+
 ```bash
-cd "D:\Nexus Intelligence Agent\backend"
 python -c "from nia.storage.database import DatabaseManager; db = DatabaseManager(); db.init_db(); print('OK')"
 ```
 
 ### 10. 启动
 
-确保 Redis 与 MongoDB 已在运行，然后：
+确保 Redis 与 MongoDB 已在运行（Redis 默认 `6379`，MongoDB 默认 `27017`），然后：
 
 ```bash
-# 终端1: 启动后端 API（用 JS 渲染时请去掉 --reload，避免反复重启浏览器）
-cd "D:\Nexus Intelligence Agent\backend"
+# 终端1: 在 backend 目录下启动后端 API（单进程；用 JS 渲染时不要加 --reload）
 uvicorn nia.api.app:app --host 0.0.0.0 --port 8000
 
-# 终端2: 启动前端
-cd "D:\Nexus Intelligence Agent\frontend"
+# 终端2: 在 frontend 目录下启动前端
 npm run dev
 ```
 
 浏览器访问 http://localhost:5173 ，首页即「🤖 自主 Agent」控制台。
 
-> 💡 启动前可先运行 `python verify.py` 做后端自检（语法 / 导入 / 依赖）。
+> ⚠️ **必须单进程运行**（默认即 `workers=1`，不要加 `--workers`）：任务与事件状态保存在进程内存中，多 worker 会导致状态串台。
+> ⚠️ 用 JS 渲染时不要加 `--reload`（reloader 会反复重启浏览器）。
+
+> 💡 启动前可先运行 `python verify.py` 做后端自检。它会检查语法 / 模块导入 / 依赖 / Embedding 维度配置 / RAG 真实冒烟测试（向量化 → FAISS 插入 → 检索）/ Redis、MongoDB 连通性；退出码 `0` = 可启动，`1` = 存在阻断性问题。模型因网络下载失败只报警告（属环境问题），MongoDB 未启动也只警告。
+
+## 可选：API 鉴权
+
+默认不鉴权（仅建议本机使用）。设置环境变量 `API_AUTH_TOKEN` 后，所有 `/api/*` 请求必须携带请求头 `X-API-Token: <值>`，否则返回 401（`/api/health` 除外）：
+
+```env
+API_AUTH_TOKEN=your-random-token
+```
+
+前端通过 `VITE_API_TOKEN` 传入同一个值；前端后端地址可用 `VITE_API_BASE_URL` 覆盖（默认 `/api`，开发时由 Vite 代理到 `:8000`）。
+
+## Docker 部署
+
+```bash
+docker compose up --build
+```
+
+会启动 **redis + mongodb + api** 三个服务。api 容器用 `STATIC_DIR=/app/static` 把前端构建产物作为 SPA 挂在 8000 端口（前端路由回落到 `index.html`），因此生产环境只需访问 **http://localhost:8000**。embedding 模型缓存与 FAISS 索引持久化在 `app_data` 卷（容器内 `/app/data`）。仓库已包含 `.dockerignore`（会排除 `backend/.env`，避免真实 API Key 被打进镜像层）；compose 中已移除 qdrant 服务（v2 默认 FAISS，不再需要）。
 
 ## 更新日志
+
+### 2026-06-07 — v2.1 维护与修复
+
+- **路由修复**：`GET /api/crawl/results` 此前被 `/{task_id}` 动态路由遮蔽、恒定 404，现已在路由顺序上修正
+- **监控统计修复**：`GET /api/monitor/stats` 返回字段补全（`finished_tasks`、`avg_crawl_time_ms`、`avg_llm_calls`、`queue_pending`、`dead_letter_count`、`error_summary`、`degraded`，并保留旧字段 `avg_llm_time`）；`GET /api/monitor/domains` 改为按 `crawled_data` 聚合真实域名分布
+- **批量取消**：新增 `POST /api/crawl/batch/{task_id}/cancel`，SSE 收到 `{"event": "cancelled"}` 并以 `cancelled` 状态结束
+- **并发上限**：批量爬取与 Agent 均受 `MAX_CONCURRENT_CRAWLS`（默认 4）限制，超限返回 HTTP 429
+- **SPA 静态托管**：Docker 中 `STATIC_DIR=/app/static`，前端构建产物作为 SPA 挂在 8000 端口，生产环境只需访问 `http://localhost:8000`
+- **可选鉴权**：设置 `API_AUTH_TOKEN` 后 `/api/*` 需带 `X-API-Token` 请求头
+- **数据接口细化**：新增 `GET /api/data/{data_id}` 返回含 `raw_html` 的完整文档；`GET /api/data` 列表不再返回 `raw_html`
+- **文档对齐**：本 README 与《运行步骤.md》按当前代码与 `.env.example` 默认值全面校正
 
 ### 2026-06-07 — UI 高级化改版
 

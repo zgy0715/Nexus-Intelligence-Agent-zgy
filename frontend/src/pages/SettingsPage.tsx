@@ -4,6 +4,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { Settings, RefreshCw, Cpu, Database } from "lucide-react";
+import { toast } from "sonner";
 import { api } from "@/api/client";
 import type { ServiceStatus } from "@/types";
 import { Card } from "@/components/ui/Card";
@@ -63,8 +64,8 @@ export default function SettingsPage() {
         setConfig(c.config);
         setServices(s);
       }
-    } catch {
-      /* ignore */
+    } catch (e) {
+      if (mountedRef.current) toast.error(e instanceof Error ? e.message : "加载配置失败");
     } finally {
       if (mountedRef.current) {
         setLoading(false);

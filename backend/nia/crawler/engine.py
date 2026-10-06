@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import dataclasses
+import hashlib
 import logging
 import time
 from typing import Awaitable, Callable
@@ -38,8 +40,11 @@ class CrawlEngine:
         cfg = self._config
         start = time.monotonic()
         frontier = URLFrontier(cfg, seeds)
-        pages: list[PageContent] = []
+        # 只保留轻量摘要（不持有整页 HTML），返回值和 stats 都只需要这些字段
+        pages: list[dict] = []
         findings: list[Finding] = []
+        seen_content: set[str] = set()
+        page_errors = 0
 
         async def emit(event: str, **data):
             if progress_cb:
@@ -50,7 +55,7 @@ class CrawlEngine:
         async with AsyncFetcher(cfg) as fetcher:
             extractor = StructuredExtractor(cfg) if instruction else None
             try:
-                while frontier.has_next() and frontier.visited_count <= cfg.max_pages:
+                while frontier.has_next() and len(pages) < cfg.max_pages:
                     batch = frontier.pop_batch(cfg.concurrency)
                     if not batch:
                         break
@@ -59,18 +64,45 @@ class CrawlEngine:
                     batch_pages: list[PageContent] = []
                     for (url, depth), fr in zip(batch, fetch_results):
                         if not fr.success:
-                            await emit("page_error", url=url, error=fr.error)
+                            page_errors += 1
+                            await emit(
+                                "page_error",
+                                url=url,
+                                error=fr.error,
+                                blocked_by_robots=fr.blocked_by_robots,
+                            )
                             continue
+
                         page = parse_html(fr.html, fr.final_url or url)
-                        pages.append(page)
+
+                        # 正文去重：镜像页/分页参数变体不再重复提取与存储
+                        digest = hashlib.sha1(page.text.encode("utf-8", "ignore")).hexdigest()
+                        if digest in seen_content:
+                            await emit("page_duplicate", url=page.url, title=page.title)
+                            continue
+                        seen_content.add(digest)
+
+                        pages.append(
+                            {
+                                "url": page.url,
+                                "title": page.title,
+                                "chars": len(page.text),
+                                "links": len(page.links),
+                                "depth": depth,
+                                "rendered_js": fr.rendered_js,
+                            }
+                        )
                         batch_pages.append(page)
+
                         if on_page is not None:
                             try:
                                 await on_page(page)
                             except Exception as e:
-                                logger.warning(f"on_page sink failed for {page.url}: {e}")
+                                logger.warning("on_page sink failed for %s: %s", page.url, e)
+
                         if depth < cfg.max_depth:
                             frontier.add_many(page.links, depth + 1, parent=page.url)
+
                         await emit(
                             "page",
                             url=page.url,
@@ -78,44 +110,65 @@ class CrawlEngine:
                             depth=depth,
                             links=len(page.links),
                             chars=len(page.text),
+                            truncated=fr.truncated,
+                            rendered_js=fr.rendered_js,
                             elapsed=round(fr.elapsed, 2),
                             visited=frontier.visited_count,
+                            queued=frontier.queued_count,
                         )
+
+                        if len(pages) >= cfg.max_pages:
+                            break
 
                     if extractor and batch_pages:
                         batch_findings = await extractor.extract_many(batch_pages, instruction)
                         for f in batch_findings:
                             if f.data:
                                 findings.append(f)
-                                await emit("finding", url=f.url, title=f.title, fields=len(f.data))
+                                await emit(
+                                    "finding",
+                                    url=f.url,
+                                    title=f.title,
+                                    fields=len(f.data),
+                                    data=f.data,
+                                )
             finally:
                 if extractor:
-                    await extractor._cache.close()
+                    await extractor.aclose()
 
         stats = {
             "pages_crawled": len(pages),
             "findings": len(findings),
+            "page_errors": page_errors,
+            "duplicates": len(seen_content) - len(pages),
+            "skipped": frontier.skipped,
             "elapsed": round(time.monotonic() - start, 2),
         }
         await emit("done", **stats)
         return {
-            "pages": [{"url": p.url, "title": p.title, "chars": len(p.text), "links": len(p.links)} for p in pages],
+            "pages": pages,
             "findings": [f.to_dict() for f in findings],
             "stats": stats,
         }
 
     async def crawl_urls(
-        self, urls: list[str], instruction: str = "", progress_cb: ProgressCb | None = None
+        self,
+        urls: list[str],
+        instruction: str = "",
+        progress_cb: ProgressCb | None = None,
+        on_page: Callable[[PageContent], Awaitable[None]] | None = None,
     ) -> dict:
-        """批量并发抓取一组 URL（不跟随链接）。"""
-        # 复制配置并禁用深度/同域，仅抓给定 URL
-        cfg = CrawlConfig(
+        """批量并发抓取一组 URL（不跟随链接）。
+
+        旧实现会重新构造一个 CrawlConfig，把 request_timeout / max_retries /
+        cache_ttl / js_fallback 等字段全部丢掉；这里用 dataclasses.replace 复制，
+        只覆盖真正需要改的三个字段。
+        """
+        cfg = dataclasses.replace(
+            self._config,
             max_depth=0,
-            max_pages=max(len(urls), self._config.max_pages),
+            max_pages=len(urls),
             same_domain_only=False,
-            concurrency=self._config.concurrency,
-            llm_concurrency=self._config.llm_concurrency,
-            use_js=self._config.use_js,
         )
         engine = CrawlEngine(cfg)
-        return await engine.crawl(urls, instruction, progress_cb)
+        return await engine.crawl(urls, instruction, progress_cb, on_page)

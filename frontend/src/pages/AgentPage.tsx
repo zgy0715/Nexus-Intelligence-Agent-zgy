@@ -93,12 +93,17 @@ export default function AgentPage() {
       case "finish":
         setReport(e.report ?? "");
         setFinishReason(e.reason ?? "");
+        // finish 事件携带完整发现列表，用它兜底补齐（事件丢失时侧栏不会残缺）
+        if (Array.isArray(e.findings) && e.findings.length > 0) {
+          setFindings(e.findings);
+        }
         setRunning(false);
         push(e);
         toast.success("Agent 任务完成", { description: e.reason });
         break;
       case "error":
         push(e);
+        setRunning(false);
         toast.error("Agent 出错", { description: e.message });
         break;
       default:
@@ -113,6 +118,10 @@ export default function AgentPage() {
       .filter(Boolean);
     if (!goal.trim()) return toast.error("请填写目标");
     if (seedList.length === 0) return toast.error("请至少填写一个种子 URL");
+    if (!Number.isFinite(maxPages) || maxPages < 1 || maxPages > 200)
+      return toast.error("最大页数需要在 1–200 之间");
+    if (!Number.isFinite(maxDepth) || maxDepth < 0 || maxDepth > 5)
+      return toast.error("跟随深度需要在 0–5 之间");
 
     setTimeline([]);
     setFindings([]);
@@ -318,7 +327,7 @@ export default function AgentPage() {
             ) : (
               <div className="space-y-2">
                 {findings.map((f, i) => (
-                  <div key={i} className="rounded-lg border border-border bg-background/50 p-3">
+                  <div key={`${f.url ?? ""}-${i}`} className="rounded-lg border border-border bg-background/50 p-3">
                     <div className="mb-1 text-sm font-medium text-foreground">
                       {f.title || "（无标题）"}
                     </div>

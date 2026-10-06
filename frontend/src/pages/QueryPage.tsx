@@ -96,7 +96,10 @@ export default function QueryPage() {
       .then((res) => {
         if (!cancelled && mountedRef.current) setChatHistory(res.history);
       })
-      .catch(() => {})
+      .catch((e) => {
+        if (!cancelled && mountedRef.current)
+          toast.error(e instanceof Error ? e.message : "历史记录加载失败");
+      })
       .finally(() => {
         if (!cancelled && mountedRef.current) setLoadingHistory(false);
       });
@@ -119,9 +122,14 @@ export default function QueryPage() {
       const res = await api.query(question);
       if (mountedRef.current)
         addChatMessage({ role: "assistant", content: res.answer, sources: res.sources });
-    } catch {
-      if (mountedRef.current)
-        addChatMessage({ role: "assistant", content: "抱歉，查询过程中出现错误，请稍后重试。" });
+    } catch (e) {
+      if (mountedRef.current) {
+        const detail = e instanceof Error && e.message ? `（${e.message}）` : "";
+        addChatMessage({
+          role: "assistant",
+          content: `抱歉，查询过程中出现错误${detail}，请稍后重试。`,
+        });
+      }
     } finally {
       if (mountedRef.current) setSending(false);
     }

@@ -1,13 +1,16 @@
 export interface CrawlResult {
-  id: string;
+  // `/api/crawl/results` 返回的是 crawl_tasks 文档（主键是 task_id，没有 id），
+  // `/api/data` 返回的是 crawled_data 文档（没有 status）——两者都不要写成必填。
+  id?: string;
   task_id?: string;
   url: string;
   timestamp?: string;
   created_at?: string;
-  status: 'queued' | 'pending' | 'running' | 'completed' | 'failed';
+  status?: 'queued' | 'pending' | 'running' | 'completed' | 'failed';
   extracted_data?: Record<string, unknown>;
   domain?: string;
   title?: string;
+  content?: string;
   method?: string;
   extraction_method?: string;
   instruction?: string;
@@ -36,11 +39,17 @@ export interface ChatMessage {
 
 export interface MonitorStats {
   total_tasks: number;
+  finished_tasks?: number;
   success_rate: number;
   llm_calls: number;
-  avg_llm_time: number;
+  avg_llm_time?: number;
+  avg_llm_time_ms?: number;
+  avg_crawl_time_ms?: number;
+  avg_llm_calls?: number;
   queue_pending: number;
   dead_letter_count: number;
+  error_summary?: Record<string, number>;
+  degraded?: boolean;
 }
 
 // ── 自主 Agent ────────────────────────────────────────────────────

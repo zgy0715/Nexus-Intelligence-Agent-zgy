@@ -4,7 +4,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Globe, Play, Link2, FileText, CheckCircle2, XCircle, Gauge } from "lucide-react";
+import { Globe, Play, Square, Link2, FileText, CheckCircle2, XCircle, Gauge } from "lucide-react";
 import { api } from "@/api/client";
 import type { BatchEvent } from "@/types";
 import { Card } from "@/components/ui/Card";
@@ -36,13 +36,20 @@ export default function CrawlPage() {
   const [useJs, setUseJs] = useState(false);
 
   const [running, setRunning] = useState(false);
+  const [taskId, setTaskId] = useState<string | null>(null);
   const [pages, setPages] = useState<PageRow[]>([]);
   const [findings, setFindings] = useState<FindingRow[]>([]);
   const [stats, setStats] = useState<{ pages_crawled: number; findings: number; elapsed: number } | null>(null);
   const cleanupRef = useRef<(() => void) | null>(null);
+  // SSE 回调里读 state 会拿到创建时的闭包快照，计数用 ref 兜底
+  const pagesCountRef = useRef(0);
 
   // 卸载时关闭 SSE
   useEffect(() => () => cleanupRef.current?.(), []);
+
+  useEffect(() => {
+    pagesCountRef.current = pages.length;
+  }, [pages]);
 
   const handleEvent = (e: BatchEvent) => {
     switch (e.event) {
@@ -55,18 +62,36 @@ export default function CrawlPage() {
       case "page_error":
         setPages((p) => [...p, { url: String(e.url), ok: false, error: e.error as string }]);
         break;
-      case "result":
-        setFindings(((e.findings as FindingRow[]) || []).map((f) => ({ url: f.url, title: f.title, data: f.data })));
+      case "finding":
+        // 引擎会边抓边发 finding，长任务不必等最后一次 result 才能看到结果
+        setFindings((f) => [
+          ...f,
+          { url: String(e.url), title: e.title as string, data: e.data as Record<string, unknown> },
+        ]);
+        break;
+      case "result": {
+        const rows = (e.findings as FindingRow[]) || [];
+        if (rows.length > 0) {
+          setFindings(rows.map((f) => ({ url: f.url, title: f.title, data: f.data })));
+        }
         setStats(e.stats as { pages_crawled: number; findings: number; elapsed: number });
         break;
+      }
       case "done":
-        setStats({
-          pages_crawled: (e.pages_crawled as number) ?? pages.length,
-          findings: (e.findings as number) ?? 0,
-          elapsed: (e.elapsed as number) ?? 0,
-        });
+        setStats((prev) => ({
+          pages_crawled: (e.pages_crawled as number) ?? prev?.pages_crawled ?? pagesCountRef.current,
+          findings: (e.findings as number) ?? prev?.findings ?? 0,
+          elapsed: (e.elapsed as number) ?? prev?.elapsed ?? 0,
+        }));
+        setRunning(false);
+        break;
+      case "cancelled":
+        setRunning(false);
+        toast.info("爬取已取消");
         break;
       case "error":
+        // 出错必须复位按钮，否则主按钮会永久停在「爬取中…」
+        setRunning(false);
         toast.error("爬取出错", { description: e.error as string });
         break;
     }
@@ -78,6 +103,8 @@ export default function CrawlPage() {
       .map((s) => s.trim())
       .filter(Boolean);
     if (seedList.length === 0) return toast.error("请至少填写一个 URL");
+    if (!Number.isFinite(maxPages) || maxPages < 1) return toast.error("最大页数需要是 ≥1 的整数");
+    if (!Number.isFinite(maxDepth) || maxDepth < 0) return toast.error("跟随深度需要是 ≥0 的整数");
 
     setPages([]);
     setFindings([]);
@@ -92,6 +119,7 @@ export default function CrawlPage() {
         max_pages: maxPages,
         same_domain_only: sameDomain,
       });
+      setTaskId(task_id);
       setRunning(true);
       cleanupRef.current = api.subscribeBatch(
         task_id,
@@ -106,7 +134,18 @@ export default function CrawlPage() {
         },
       );
     } catch (e) {
+      setRunning(false);
       toast.error("启动失败", { description: e instanceof Error ? e.message : String(e) });
+    }
+  };
+
+  const handleStop = async () => {
+    if (!taskId) return;
+    try {
+      const res = await api.cancelBatch(taskId);
+      toast.info(res.message);
+    } catch (e) {
+      toast.error("取消失败", { description: e instanceof Error ? e.message : String(e) });
     }
   };
 
@@ -195,7 +234,12 @@ export default function CrawlPage() {
             />
             JS 渲染
           </label>
-          <div className="ml-auto">
+          <div className="ml-auto flex items-center gap-2">
+            {running && (
+              <Button variant="outline" onClick={handleStop}>
+                <Square className="h-4 w-4" /> 停止
+              </Button>
+            )}
             <Button onClick={handleStart} loading={running}>
               <Play className="h-4 w-4" /> {running ? "爬取中…" : "开始爬取"}
             </Button>
@@ -243,7 +287,7 @@ export default function CrawlPage() {
               <div className="space-y-1.5">
                 {pages.map((p, i) => (
                   <div
-                    key={i}
+                    key={`${p.url}-${i}`}
                     className="flex animate-fade-in items-start gap-2 rounded-lg border border-border bg-background/40 p-2.5"
                   >
                     {p.ok ? (
@@ -279,7 +323,7 @@ export default function CrawlPage() {
             ) : (
               <div className="space-y-2">
                 {findings.map((f, i) => (
-                  <div key={i} className="rounded-lg border border-border bg-background/40 p-3">
+                  <div key={`${f.url}-${i}`} className="rounded-lg border border-border bg-background/40 p-3">
                     <div className="mb-1 text-sm font-medium text-foreground">{f.title || f.url}</div>
                     <a href={f.url} target="_blank" rel="noreferrer" className="line-clamp-1 text-xs text-primary hover:underline">
                       {f.url}

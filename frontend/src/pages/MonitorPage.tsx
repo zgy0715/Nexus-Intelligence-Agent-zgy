@@ -116,6 +116,7 @@ export default function MonitorPage() {
   const [stats, setStats] = useState<MonitorStats | null>(null);
   const [domains, setDomains] = useState<DomainStat[]>([]);
   const [alert, setAlert] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
   const dark = useStore((s) => s.theme === "dark");
@@ -138,8 +139,10 @@ export default function MonitorPage() {
       setStats(s);
       setDomains(d.domains);
       setAlert(a.alert);
-    } catch {
-      /* ignore */
+      setError(null);
+    } catch (e) {
+      if (!mountedRef.current) return;
+      setError(e instanceof Error ? e.message : "加载监控数据失败");
     } finally {
       if (mountedRef.current) setLoading(false);
     }
@@ -183,7 +186,17 @@ export default function MonitorPage() {
         </Button>
       </div>
 
-      {alert ? (
+      {error ? (
+        <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
+          <AlertTriangle size={16} />
+          {error}
+        </div>
+      ) : stats?.degraded ? (
+        <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600">
+          <AlertTriangle size={16} />
+          部分依赖不可用（MongoDB 或 Redis 未连接），统计数据可能不完整
+        </div>
+      ) : alert ? (
         <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
           <AlertTriangle size={16} />
           {alert}
@@ -199,12 +212,14 @@ export default function MonitorPage() {
         <MetricCard icon={ListChecks} label="总任务数" value={stats?.total_tasks ?? "-"} />
         <MetricCard icon={TrendingUp} label="成功率" value={stats != null ? `${stats.success_rate}%` : "-"} />
         <MetricCard icon={Cpu} label="LLM 调用" value={stats?.llm_calls ?? "-"} />
-        <MetricCard icon={Clock} label="平均耗时" value={stats != null ? `${stats.avg_llm_time}ms` : "-"} />
+        <MetricCard icon={Clock} label="平均 LLM 耗时" value={stats != null ? `${stats.avg_llm_time_ms ?? stats.avg_llm_time ?? 0}ms` : "-"} />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
         <MetricCard icon={Inbox} label="队列待处理" value={stats?.queue_pending ?? "-"} />
         <MetricCard icon={AlertTriangle} label="失败任务" value={stats?.dead_letter_count ?? "-"} />
+        <MetricCard icon={Clock} label="平均爬取耗时" value={stats != null ? `${stats.avg_crawl_time_ms ?? 0}ms` : "-"} />
+        <MetricCard icon={Cpu} label="平均 LLM 调用" value={stats?.avg_llm_calls ?? "-"} />
       </div>
 
       <Card className="p-5">

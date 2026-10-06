@@ -17,6 +17,10 @@ from nia.utils.config import Config
 
 logger = logging.getLogger(__name__)
 
+_RAG_DIR = os.path.dirname(os.path.abspath(__file__))      # backend/nia/rag
+_PKG_DIR = os.path.dirname(_RAG_DIR)                        # backend/nia
+_BACKEND_DIR = os.path.dirname(_PKG_DIR)                    # backend
+
 
 class BaseVectorStore(ABC):
     """向量存储抽象基类。"""
@@ -55,18 +59,38 @@ class QdrantVectorStore(BaseVectorStore):
 
         self._client = QdrantClient(url=Config.QDRANT_URL)
         self._collection = Config.QDRANT_COLLECTION
+        self._embedding_dim = Config.EMBED_DIM
 
         # 自动创建 collection（如果不存在）
-        collections = [c.name for c in self._client.get_collections().collections]
-        if self._collection not in collections:
+        existing = {c.name: c for c in self._client.get_collections().collections}
+        if self._collection not in existing:
             self._client.create_collection(
                 collection_name=self._collection,
                 vectors_config=VectorParams(
-                    size=1024,  # bge-m3 默认 1024 维
+                    size=self._embedding_dim,
                     distance=Distance.COSINE,
                 ),
             )
-            logger.info(f"Created Qdrant collection: {self._collection}")
+            logger.info(
+                f"Created Qdrant collection: {self._collection} (dim={self._embedding_dim})"
+            )
+        else:
+            self._validate_collection_dim()
+
+    def _validate_collection_dim(self) -> None:
+        """已有 collection 的维度必须与当前 Embedding 模型一致，否则写入必然失败。"""
+        try:
+            info = self._client.get_collection(self._collection)
+            size = info.config.params.vectors.size
+        except Exception as e:  # Qdrant 版本差异 / 网络问题，不阻塞启动
+            logger.warning(f"Cannot inspect Qdrant collection dim: {e}")
+            return
+        if size != self._embedding_dim:
+            raise RuntimeError(
+                f"Qdrant collection '{self._collection}' 维度为 {size}，"
+                f"但当前 EMBED_DIM={self._embedding_dim}（EMBED_MODEL={Config.EMBED_MODEL}）。"
+                f"请改回匹配的 EMBED_DIM，或删除该 collection 后重新索引。"
+            )
 
     def add_vectors(
         self,
@@ -144,11 +168,15 @@ class FAISSVectorStore(BaseVectorStore):
         import faiss
 
         self._embedding_dim = embedding_dim
-        self._index_dir = os.path.join(
-            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-            "_data",
-            "faiss",
-        )
+        # FAISS_INDEX_PATH 若已配置则按它解析（相对路径以 backend/ 为基准），否则用默认目录
+        configured = Config.FAISS_INDEX_PATH
+        if configured and configured != "./data/faiss_index":
+            base = configured
+            if not os.path.isabs(base):
+                base = os.path.join(_BACKEND_DIR, base)
+            self._index_dir = base
+        else:
+            self._index_dir = os.path.join(_PKG_DIR, "_data", "faiss")
         self._index_path = os.path.join(self._index_dir, "index.faiss")
         self._metadata_path = os.path.join(self._index_dir, "metadata.json")
         self._lock = threading.Lock()
@@ -169,6 +197,18 @@ class FAISSVectorStore(BaseVectorStore):
 
         with self._lock:
             embeddings_np = np.array(embeddings, dtype=np.float32)
+            # 元数据必须与写入的向量一一对应，否则索引与元数据永久错位
+            if embeddings_np.size == 0 or embeddings_np.shape[0] != len(chunks):
+                logger.warning(
+                    f"add_vectors skipped: {len(chunks)} chunks vs "
+                    f"{embeddings_np.shape[0] if embeddings_np.ndim == 2 else 0} embeddings"
+                )
+                return
+            if embeddings_np.shape[1] != self._embedding_dim:
+                raise ValueError(
+                    f"向量维度 {embeddings_np.shape[1]} 与索引维度 {self._embedding_dim} 不一致，"
+                    f"请检查 EMBED_MODEL / EMBED_DIM 配置并重建索引。"
+                )
             norms = np.linalg.norm(embeddings_np, axis=1, keepdims=True)
             norms[norms == 0] = 1.0
             embeddings_np = embeddings_np / norms
@@ -269,44 +309,80 @@ class FAISSVectorStore(BaseVectorStore):
                 self._metadata = json.load(f)
             if not isinstance(self._metadata, list):
                 logger.warning("Vector store metadata is not a list, reinitializing")
-                self._metadata = []
-                self._index = faiss.IndexFlatIP(self._embedding_dim)
+                self._reset()
+                return False
+            if self._index.d != self._embedding_dim:
+                logger.warning(
+                    f"索引维度 ({self._index.d}) 与当前 EMBED_DIM ({self._embedding_dim}) "
+                    f"不一致（EMBED_MODEL={Config.EMBED_MODEL}），丢弃旧索引并重建"
+                )
+                self._reset()
                 return False
             if self._index.ntotal != len(self._metadata):
                 logger.warning(
                     f"Vector store index count ({self._index.ntotal}) "
                     f"does not match metadata count ({len(self._metadata)}), reinitializing"
                 )
-                self._metadata = []
-                self._index = faiss.IndexFlatIP(self._embedding_dim)
+                self._reset()
                 return False
+            logger.info(f"FAISS index loaded: {self._index.ntotal} vectors (dim={self._index.d})")
             return True
         except Exception as e:
             logger.warning(f"Failed to load vector store index: {e}")
             return False
 
+    def _reset(self) -> None:
+        import faiss
+
+        self._metadata = []
+        self._index = faiss.IndexFlatIP(self._embedding_dim)
+
 
 # ── 工厂函数 ─────────────────────────────────────────────────────
 
+_store_lock = threading.Lock()
+_store: "BaseVectorStore | None" = None
+
 
 def get_vector_store() -> BaseVectorStore:
-    """根据配置返回对应的向量存储实例。"""
-    store_type = Config.VECTOR_STORE
-    if store_type == "qdrant":
-        return QdrantVectorStore()
-    elif store_type == "faiss":
-        return FAISSVectorStore(embedding_dim=Config.EMBED_DIM)
-    else:
-        raise ValueError(f"Unknown vector store: {store_type}")
+    """返回**进程内唯一**的向量存储实例。
+
+    FAISS 后端每次写盘都是"整索引覆盖"，多个实例并存会导致最后一个写者
+    覆盖其它实例的写入，而且后创建的实例看不到此前索引的数据 —— 因此必须
+    全进程共用一个实例（读写都在同一份内存索引上）。
+    """
+    global _store
+    if _store is not None:
+        return _store
+    with _store_lock:
+        if _store is not None:
+            return _store
+        store_type = Config.VECTOR_STORE
+        if store_type == "qdrant":
+            _store = QdrantVectorStore()
+        elif store_type == "faiss":
+            _store = FAISSVectorStore(embedding_dim=Config.EMBED_DIM)
+        else:
+            raise ValueError(
+                f"Unknown vector store: {store_type!r} (可选: faiss | qdrant)"
+            )
+        return _store
+
+
+def reset_vector_store() -> None:
+    """丢弃缓存的实例（测试或配置变更后使用）。"""
+    global _store
+    with _store_lock:
+        _store = None
 
 
 # ── 兼容旧代码 ───────────────────────────────────────────────────
 
 
 class VectorStore:
-    """兼容旧代码的包装类，自动根据配置选择后端。"""
+    """兼容旧代码的包装类，委托给进程内共享的后端实例。"""
 
-    def __init__(self, embedding_dim: int = 1024):
+    def __init__(self, embedding_dim: int | None = None):
         self._store = get_vector_store()
 
     def add_vectors(

@@ -37,20 +37,27 @@ class AsyncBrowserPool:
             return cls._crawler
 
     @classmethod
-    async def fetch(cls, url: str) -> dict:
-        """渲染并返回 {html, status_code, success, error}。"""
+    async def fetch(cls, url: str, timeout: float | None = None) -> dict:
+        """渲染并返回 {html, status_code, success, final_url, error}。"""
         try:
             crawler = await cls._ensure()
-            result = await crawler.arun(url=url)
+            coro = crawler.arun(url=url)
+            result = await (asyncio.wait_for(coro, timeout=timeout) if timeout else coro)
+            final_url = (
+                getattr(result, "redirected_url", None)
+                or getattr(result, "url", None)
+                or url
+            ) if result else url
             return {
                 "html": result.html if result else "",
                 "status_code": getattr(result, "status_code", None) if result else None,
                 "success": bool(result and result.success),
+                "final_url": final_url,
                 "error": "",
             }
         except Exception as e:
             logger.warning(f"AsyncBrowserPool.fetch failed for {url}: {e}")
-            return {"html": "", "status_code": None, "success": False, "error": str(e)}
+            return {"html": "", "status_code": None, "success": False, "final_url": url, "error": str(e)}
 
     @classmethod
     async def close(cls):

@@ -13,7 +13,14 @@ import type {
   BatchEvent,
 } from '@/types';
 
-const BASE_URL = '/api';
+const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || '/api';
+
+// 可选鉴权：后端配置 API_AUTH_TOKEN 后，这里通过 VITE_API_TOKEN 提供 X-API-Token
+const API_TOKEN = import.meta.env.VITE_API_TOKEN as string | undefined;
+
+function authHeaders(): Record<string, string> {
+  return API_TOKEN ? { 'X-API-Token': API_TOKEN } : {};
+}
 
 /** 通用 SSE 订阅（约定终止符 data: [DONE]）。返回清理函数。 */
 function subscribeSSE<T>(
@@ -22,9 +29,11 @@ function subscribeSSE<T>(
   onDone: () => void,
   onError: (error: string) => void,
 ): () => void {
+  let finished = false;
   const es = new EventSource(`${BASE_URL}${path}`);
   es.onmessage = (event) => {
     if (event.data === '[DONE]') {
+      finished = true;
       es.close();
       onDone();
       return;
@@ -32,30 +41,48 @@ function subscribeSSE<T>(
     try {
       onMessage(JSON.parse(event.data) as T);
     } catch {
-      /* 忽略心跳/解析错误 */
+      /* 忽略心跳/非法帧，不让单个坏帧中断整条流 */
     }
   };
   es.onerror = () => {
+    if (finished) return;
+    // readyState=CONNECTING 表示浏览器会自动重连（服务端有心跳），
+    // 此时只是提示，不要立刻关闭长连接。
+    if (es.readyState === EventSource.CONNECTING) {
+      onError('连接不稳定，正在重连…');
+      return;
+    }
     es.close();
     onError('连接中断');
   };
-  return () => es.close();
+  return () => {
+    finished = true;
+    es.close();
+  };
 }
 
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE_URL}${path}`, {
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...authHeaders() },
     ...options,
   });
   if (!res.ok) {
-    const errorText = await res.text().catch(() => '');
-    throw new Error(`请求失败: ${res.status}${errorText ? ` - ${errorText}` : ''}`);
+    // 尽量还原后端返回的 detail 字段，而不是把整段 JSON 拼进消息
+    const raw = await res.text().catch(() => '');
+    let detail = '';
+    try {
+      const parsed = JSON.parse(raw) as { detail?: unknown };
+      if (typeof parsed.detail === 'string') detail = parsed.detail;
+    } catch {
+      detail = raw;
+    }
+    throw new Error(detail || `请求失败: HTTP ${res.status}`);
   }
-  const data: unknown = await res.json();
-  if (data === null || data === undefined) {
+  const text = await res.text();
+  if (!text) {
     throw new Error(`API 返回了空响应: ${path}`);
   }
-  return data as T;
+  return JSON.parse(text) as T;
 }
 
 export interface CrawlProgress {
@@ -133,6 +160,12 @@ export const api = {
     return subscribeSSE<BatchEvent>(`/crawl/batch/${taskId}/stream`, onEvent, onDone, onError);
   },
 
+  cancelBatch(taskId: string) {
+    return request<{ message: string; status: string }>(`/crawl/batch/${taskId}/cancel`, {
+      method: 'POST',
+    });
+  },
+
   /**
    * SSE 订阅爬取进度
    * @returns 清理函数
@@ -200,10 +233,17 @@ export const api = {
 
   // ── 数据 ────────────────────────────────────────────────────────
 
-  getData(page: number, pageSize: number, search?: string) {
+  getData(page: number, pageSize: number, search?: string, signal?: AbortSignal) {
     const params = new URLSearchParams({ page: String(page), page_size: String(pageSize) });
     if (search) params.set('search', search);
-    return request<{ total: number; page: number; page_size: number; data: CrawlResult[] }>(`/data?${params}`);
+    return request<{ total: number; page: number; page_size: number; data: CrawlResult[] }>(
+      `/data?${params}`,
+      { signal },
+    );
+  },
+
+  getDataItem(dataId: string) {
+    return request<CrawlResult>(`/data/${encodeURIComponent(dataId)}`);
   },
 
   // ── 监控 ────────────────────────────────────────────────────────

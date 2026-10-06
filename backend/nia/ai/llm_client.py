@@ -4,15 +4,17 @@
 - 同步路径：chat / extract_json / generate_xpath ...（向后兼容旧代码）
 - 异步路径：achat / achat_json / achat_tools / astream（并发引擎与自主 Agent 使用）
   · 共享 httpx.AsyncClient（连接池）
-  · 指数退避重试（429 / 5xx / 超时 / 网络错误）
+  · 指数退避重试（429 / 5xx / 超时 / 网络错误），尊重 Retry-After
   · 原生 tool-calling（返回 message，含 tool_calls）
-  · 流式输出（astream）
+  · 流式输出（astream，带跨行缓冲）
+  · token 用量累计（usage）
 """
 
 import asyncio
 import json
 import logging
 import re
+import threading
 from typing import Any, AsyncGenerator
 
 import httpx
@@ -25,18 +27,62 @@ logger = logging.getLogger(__name__)
 # ── 宽松 JSON 解析（无 LLM 依赖，供 async 路径与工具参数解析复用） ──────
 
 
+def _strip_json_comments(text: str) -> str:
+    """去掉 JSON 里的 // 与 /* */ 注释，但**不碰字符串内部**。
+
+    旧实现直接用 `re.sub(r"//.*?$", ...)`，会把 `"url": "http://x"` 里的
+    `//x` 当成注释删掉 —— 而 URL 正是这个项目的主要载荷。
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    in_string = False
+    escaped = False
+    while i < n:
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if escaped:
+                escaped = False
+            elif ch == "\\":
+                escaped = True
+            elif ch == '"':
+                in_string = False
+            i += 1
+            continue
+        if ch == '"':
+            in_string = True
+            out.append(ch)
+            i += 1
+            continue
+        if ch == "/" and i + 1 < n:
+            nxt = text[i + 1]
+            if nxt == "/":
+                i += 2
+                while i < n and text[i] not in "\r\n":
+                    i += 1
+                continue
+            if nxt == "*":
+                i += 2
+                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i += 2
+                continue
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
 def loads_json_loose(text: str) -> dict | None:
     """尽力从文本中解析出 JSON 对象，失败返回 None。"""
     if not text:
         return None
     text = text.strip()
     # 1) 直接解析
-    for candidate in (text,):
-        try:
-            data = json.loads(candidate)
-            return _as_dict(data)
-        except (json.JSONDecodeError, TypeError):
-            pass
+    try:
+        return _as_dict(json.loads(text))
+    except (json.JSONDecodeError, TypeError):
+        pass
     # 2) markdown 代码块
     m = re.search(r"```(?:json)?\s*\n?(.*?)\n?\s*```", text, re.DOTALL)
     if m:
@@ -48,13 +94,14 @@ def loads_json_loose(text: str) -> dict | None:
     start, end = text.find("{"), text.rfind("}")
     if start != -1 and end > start:
         body = text[start : end + 1]
-        body = re.sub(r"//.*?$", "", body, flags=re.MULTILINE)
-        body = re.sub(r"/\*.*?\*/", "", body, flags=re.DOTALL)
-        body = re.sub(r",\s*([}\]])", r"\1", body)
-        try:
-            return _as_dict(json.loads(body))
-        except (json.JSONDecodeError, TypeError):
-            pass
+        for candidate in (
+            _strip_json_comments(body),
+            re.sub(r",\s*([}\]])", r"\1", _strip_json_comments(body)),
+        ):
+            try:
+                return _as_dict(json.loads(candidate))
+            except (json.JSONDecodeError, TypeError):
+                continue
     return None
 
 
@@ -68,6 +115,10 @@ def _as_dict(data: Any) -> dict:
 
 # 触发重试的 HTTP 状态码
 _RETRY_STATUS = {408, 429, 500, 502, 503, 504}
+# 去掉 response_format 后重试的状态码（模型不支持该参数）
+_UNSUPPORTED_PARAM_STATUS = {400, 404, 422}
+# o1/o3/gpt-5 系列不接受 max_tokens，改用 max_completion_tokens
+_MAX_COMPLETION_TOKENS_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 
 
 class LLMClient:
@@ -76,14 +127,53 @@ class LLMClient:
     def __init__(self):
         self._provider: LLMProvider = Config.LLM_PROVIDER
         self._config = Config.get_llm_config()
-        self._base_url = self._config["base_url"].rstrip("/")
+        base_url = (self._config["base_url"] or "").rstrip("/")
+        # Ollama 的 OpenAI 兼容端点挂在 /v1 下；配置里通常只写 http://localhost:11434
+        if self._provider == LLMProvider.OLLAMA and not base_url.endswith("/v1"):
+            base_url = f"{base_url}/v1"
+        self._base_url = base_url
         self._api_key = self._config["api_key"]
         self._model = self._config["model"]
-        self._client = httpx.Client(timeout=60)
+        self._client: httpx.Client | None = None
+        self._client_lock = threading.Lock()
         self._aclient: httpx.AsyncClient | None = None
+        self._usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         logger.info(f"LLM client: provider={self._provider.value}, model={self._model}")
 
+    # ── 用量统计 ──────────────────────────────────────────────────
+
+    def _record_usage(self, data: dict) -> None:
+        usage = data.get("usage") if isinstance(data, dict) else None
+        if not isinstance(usage, dict):
+            return
+        self._usage["calls"] += 1
+        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+            value = usage.get(key)
+            if isinstance(value, int):
+                self._usage[key] += value
+
+    @property
+    def usage(self) -> dict:
+        """累计 token 用量（进程内），供监控/成本估算使用。"""
+        return dict(self._usage)
+
+    def reset_usage(self) -> None:
+        for key in self._usage:
+            self._usage[key] = 0
+
     # ── 同步路径（向后兼容） ──────────────────────────────────────
+
+    def _get_client(self) -> httpx.Client:
+        """惰性创建同步客户端；不再在 __init__ 里无条件占用连接与 FD。"""
+        if self._client is None or self._client.is_closed:
+            with self._client_lock:
+                if self._client is None or self._client.is_closed:
+                    self._client = httpx.Client(timeout=httpx.Timeout(Config.LLM_TIMEOUT, connect=10.0))
+        return self._client
+
+    def _token_param(self) -> str:
+        model = (self._model or "").lower()
+        return "max_completion_tokens" if model.startswith(_MAX_COMPLETION_TOKENS_PREFIXES) else "max_tokens"
 
     def _chat(self, messages: list[dict], temperature: float = 0.1, max_tokens: int = 4096) -> str:
         url = f"{self._base_url}/chat/completions"
@@ -91,13 +181,14 @@ class LLMClient:
             "model": self._model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            self._token_param(): max_tokens,
         }
         try:
-            resp = self._client.post(url, json=payload, headers=self._headers())
+            resp = self._get_client().post(url, json=payload, headers=self._headers())
             resp.raise_for_status()
             data = resp.json()
-            return data["choices"][0]["message"]["content"]
+            self._record_usage(data)
+            return data["choices"][0]["message"]["content"] or ""
         except Exception as e:
             logger.error(f"LLM API error: {e}")
             raise
@@ -160,16 +251,35 @@ class LLMClient:
 
     def _headers(self) -> dict:
         return {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": f"Bearer {self._api_key or 'ollama'}",
             "Content-Type": "application/json",
         }
+
+    def _retry_delay(self, attempt: int, response: httpx.Response | None = None) -> float:
+        delay = 0.5 * (2**attempt) + (0.1 * attempt)
+        if response is not None:
+            retry_after = response.headers.get("retry-after")
+            if retry_after:
+                try:
+                    delay = max(delay, min(float(retry_after), 30.0))
+                except ValueError:
+                    from email.utils import parsedate_to_datetime
+                    import time as _time
+                    try:
+                        dt = parsedate_to_datetime(retry_after)
+                        if dt is not None:
+                            delay = max(delay, min(dt.timestamp() - _time.time(), 30.0))
+                    except (TypeError, ValueError):
+                        pass
+        return max(0.0, delay)
 
     async def _arequest(self, payload: dict) -> dict:
         """带退避重试的 chat/completions 调用，返回完整 JSON 响应。"""
         url = f"{self._base_url}/chat/completions"
         client = self._get_aclient()
+        max_retries = max(0, Config.LLM_MAX_RETRIES)
         last_exc: Exception | None = None
-        for attempt in range(Config.LLM_MAX_RETRIES + 1):
+        for attempt in range(max_retries + 1):
             try:
                 resp = await client.post(url, json=payload, headers=self._headers())
                 if resp.status_code in _RETRY_STATUS:
@@ -177,26 +287,35 @@ class LLMClient:
                         f"retryable status {resp.status_code}", request=resp.request, response=resp
                     )
                 resp.raise_for_status()
-                return resp.json()
+                data = resp.json()
+                self._record_usage(data)
+                return data
             except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError) as e:
                 last_exc = e
+                response = getattr(e, "response", None)
                 # 4xx（非重试码）直接抛出
-                if isinstance(e, httpx.HTTPStatusError) and e.response.status_code not in _RETRY_STATUS:
-                    logger.error(f"LLM API non-retryable error: {e.response.status_code} {e.response.text[:200]}")
+                if isinstance(e, httpx.HTTPStatusError) and response is not None and response.status_code not in _RETRY_STATUS:
+                    logger.error(
+                        "LLM API non-retryable error: %s %s", response.status_code, response.text[:200]
+                    )
                     raise
-                if attempt < Config.LLM_MAX_RETRIES:
-                    delay = 0.5 * (2 ** attempt) + (0.1 * attempt)
-                    logger.warning(f"LLM request retry {attempt + 1}/{Config.LLM_MAX_RETRIES} after {delay:.1f}s: {e}")
+                if attempt < max_retries:
+                    delay = self._retry_delay(attempt, response)
+                    logger.warning(
+                        "LLM request retry %d/%d after %.1fs: %s", attempt + 1, max_retries, delay, e
+                    )
                     await asyncio.sleep(delay)
+        if last_exc is None:  # 理论上不可达（max_retries<0 时旧实现会在这里 TypeError）
+            raise RuntimeError("LLM 请求失败：未捕获到具体异常")
         logger.error(f"LLM request failed after retries: {last_exc}")
-        raise last_exc  # type: ignore[misc]
+        raise last_exc
 
     async def achat(self, messages: list, *, temperature: float = 0.1, max_tokens: int = 4096) -> str:
         payload = {
             "model": self._model,
             "messages": _normalize_messages(messages),
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            self._token_param(): max_tokens,
         }
         data = await self._arequest(payload)
         return data["choices"][0]["message"]["content"] or ""
@@ -208,17 +327,24 @@ class LLMClient:
             "model": self._model,
             "messages": msgs,
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            self._token_param(): max_tokens,
         }
         # DeepSeek/OpenAI 兼容 json_object 模式（要求 prompt 含 "json" 字样）
+        wants_json_format = False
         if self._provider in (LLMProvider.DEEPSEEK, LLMProvider.OPENAI, LLMProvider.QWEN):
             joined = " ".join(m.get("content", "") for m in msgs if isinstance(m.get("content"), str))
             if "json" in joined.lower():
                 payload["response_format"] = {"type": "json_object"}
+                wants_json_format = True
         try:
             data = await self._arequest(payload)
-        except httpx.HTTPStatusError:
-            # 某些模型不支持 response_format → 去掉重试一次
+        except httpx.HTTPStatusError as e:
+            # 只有「模型不支持该参数」时才降级重试；429/5xx 已经在 _arequest 里退避过了，
+            # 旧实现无条件重发一次，等于把已经花掉的成本再花一遍。
+            status = getattr(e.response, "status_code", None)
+            if not wants_json_format or status not in _UNSUPPORTED_PARAM_STATUS:
+                raise
+            logger.info("LLM 不支持 response_format（HTTP %s），去掉后重试一次", status)
             payload.pop("response_format", None)
             data = await self._arequest(payload)
         content = data["choices"][0]["message"]["content"] or ""
@@ -238,42 +364,68 @@ class LLMClient:
             "model": self._model,
             "messages": _normalize_messages(messages),
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            self._token_param(): max_tokens,
             "tools": tools,
             "tool_choice": tool_choice,
         }
         data = await self._arequest(payload)
-        return data["choices"][0]["message"]
+        message = data["choices"][0]["message"]
+        if message.get("content") is None:
+            message["content"] = ""
+        return message
 
     async def astream(self, messages: list, *, temperature: float = 0.7, max_tokens: int = 4096) -> AsyncGenerator[str, None]:
-        """流式输出，逐段 yield 文本增量。"""
+        """流式输出，逐段 yield 文本增量。
+
+        修复点：SSE 的 JSON 可能被切成多行（跨行缓冲）；`delta` 可能是 null；
+        tool-call 增量没有 content 直接跳过而不是抛 AttributeError。
+        """
         url = f"{self._base_url}/chat/completions"
         payload = {
             "model": self._model,
             "messages": _normalize_messages(messages),
             "temperature": temperature,
-            "max_tokens": max_tokens,
+            self._token_param(): max_tokens,
             "stream": True,
         }
         client = self._get_aclient()
         async with client.stream("POST", url, json=payload, headers=self._headers()) as resp:
             resp.raise_for_status()
+            buffer = ""
             async for line in resp.aiter_lines():
-                if not line or not line.startswith("data:"):
+                if not line:
+                    continue
+                if not line.startswith("data:"):
                     continue
                 chunk = line[len("data:"):].strip()
                 if chunk == "[DONE]":
                     break
+                buffer += chunk
                 try:
-                    delta = json.loads(chunk)["choices"][0]["delta"].get("content")
-                    if delta:
-                        yield delta
-                except (json.JSONDecodeError, KeyError, IndexError):
+                    parsed = json.loads(buffer)
+                except json.JSONDecodeError:
+                    # 可能是被截断的半行，等下一行拼上再试
                     continue
+                buffer = ""
+                choices = parsed.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta") or {}
+                content = delta.get("content")
+                if content:
+                    yield content
+                if parsed.get("usage"):
+                    self._record_usage(parsed)
 
     async def aclose(self) -> None:
         if self._aclient is not None and not self._aclient.is_closed:
             await self._aclient.aclose()
+        if self._client is not None and not self._client.is_closed:
+            self._client.close()
+
+    def close(self) -> None:
+        if self._client is not None and not self._client.is_closed:
+            self._client.close()
 
 
 def _normalize_messages(messages: list) -> list[dict]:
