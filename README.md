@@ -291,6 +291,15 @@ docker compose up --build
 
 ## 更新日志
 
+### 2026-10-09 — 数据库从 MongoDB 迁移到 MySQL
+
+- **存储实现**：使用 SQLAlchemy + PyMySQL 替换 PyMongo；爬取数据、任务、Agent 运行、聊天记录、提取规则、日志及向量元数据统一写入 MySQL。
+- **启动初始化**：后端启动时自动创建所需业务表；应用数据库本身需预先创建。MySQL 不可用时后端仍可启动，但持久化相关功能不可用，就绪状态会显示 `degraded`。
+- **连接配置**：新增 `MYSQL_URL`，默认地址为 `mysql+pymysql://nia:nia@localhost:3306/nia?charset=utf8mb4`；请按本机 MySQL 账号修改，默认端口为 `3306`。
+- **接口与界面**：数据、爬取、问答、Agent 和监控 API 改用 MySQL；`/api/ready` 检查 MySQL 与 Redis；设置页和监控页改为显示 MySQL 状态。
+- **部署与依赖**：Docker Compose 改用 MySQL 8 和 `mysql_data` 持久化卷；移除 MongoDB 服务及 PyMongo 依赖，新增 SQLAlchemy、PyMySQL。
+- **数据迁移说明**：已有 MongoDB 数据不会自动迁移。需要保留历史数据时，应在切换前导出，并映射导入相应 MySQL 表。
+
 ### 2026-06-07 — v2.1 维护与修复
 
 - **路由修复**：`GET /api/crawl/results` 此前被 `/{task_id}` 动态路由遮蔽、恒定 404，现已在路由顺序上修正
