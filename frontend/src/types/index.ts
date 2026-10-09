@@ -115,6 +115,6 @@ export interface BatchEvent {
 
 export interface ServiceStatus {
   redis: { connected: boolean; version?: string };
-  mongodb: { connected: boolean; version?: string };
+  mysql: { connected: boolean; version?: string };
   llm_provider?: { connected: boolean; provider: string; model: string; models?: string[] };
 }

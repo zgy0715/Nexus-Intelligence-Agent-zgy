@@ -194,7 +194,7 @@ export default function MonitorPage() {
       ) : stats?.degraded ? (
         <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600">
           <AlertTriangle size={16} />
-          部分依赖不可用（MongoDB 或 Redis 未连接），统计数据可能不完整
+          部分依赖不可用（MySQL 或 Redis 未连接），统计数据可能不完整
         </div>
       ) : alert ? (
         <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">

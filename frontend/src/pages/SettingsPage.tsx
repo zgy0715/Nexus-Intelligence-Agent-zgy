@@ -107,7 +107,7 @@ export default function SettingsPage() {
     ),
     "Embedding 配置": Object.entries(config).filter(([k]) => k.includes("EMBED")),
     向量存储: Object.entries(config).filter(([k]) => k.includes("VECTOR") || k.includes("QDRANT") || k.includes("FAISS")),
-    基础设施: Object.entries(config).filter(([k]) => k.includes("REDIS") || k.includes("MONGO")),
+    基础设施: Object.entries(config).filter(([k]) => k.includes("REDIS") || k.includes("MYSQL")),
     "爬取 / Agent": Object.entries(config).filter(([k]) => k.includes("CRAWL") || k.includes("AGENT")),
     "AI 参数": Object.entries(config).filter(([k]) => k.includes("CACHE") || k.includes("THRESHOLD") || k.includes("LOG")),
   };
@@ -135,7 +135,7 @@ export default function SettingsPage() {
           {services && (
             <>
               <ServiceCard name="Redis" icon={Database} status={services.redis} />
-              <ServiceCard name="MongoDB" icon={Database} status={services.mongodb} />
+              <ServiceCard name="MySQL" icon={Database} status={services.mysql} />
               {services.llm_provider && (
                 <ServiceCard
                   name={services.llm_provider.provider || "LLM"}
