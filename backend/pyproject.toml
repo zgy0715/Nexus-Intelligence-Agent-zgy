@@ -7,7 +7,7 @@ name = "nia"
 version = "2.0.0"
 description = "Nexus Intelligence Agent - 智能网络爬虫与情报分析系统"
 requires-python = ">=3.11"
-# 与 requirements.txt 保持一致：仅 Redis + MongoDB，本地 fastembed 做 embedding，
+# 与 requirements.txt 保持一致：仅 Redis + MySQL，本地 fastembed 做 embedding，
 # 本地 FAISS 做向量检索，不需要 Qdrant / Ollama / torch。
 dependencies = [
     "fastapi>=0.109.0,<1.0",
@@ -20,7 +20,8 @@ dependencies = [
     "faiss-cpu>=1.7.0",
     "numpy>=1.25.0,<3.0",
     "redis>=5.0.0",
-    "pymongo>=4.6.0",
+    "SQLAlchemy>=2.0.0,<3.0",
+    "PyMySQL>=1.1.0",
     "langchain-openai>=0.1.0",
     "ddddocr>=1.5.0",
     "python-dotenv>=1.0.0",

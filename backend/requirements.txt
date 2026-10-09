@@ -15,7 +15,8 @@ numpy>=1.25.0,<3.0
 
 # ── 基础设施 ──
 redis>=5.0.0
-pymongo>=4.6.0
+SQLAlchemy>=2.0.0,<3.0
+PyMySQL>=1.1.0
 
 # ── 可选：远程 embedding 后端 ──
 # EMBED_PROVIDER=openai 时需要；EMBED_PROVIDER=fastembed（默认）无需安装任何 langchain

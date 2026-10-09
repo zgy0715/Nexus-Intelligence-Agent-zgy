@@ -82,8 +82,10 @@ class Config:
 
     # ── 基础设施 ──────────────────────────────────────────────────
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    MONGO_URL = os.getenv("MONGO_URL", "mongodb://localhost:27017")
-    MONGO_DB = os.getenv("MONGO_DB", "nia")
+    MYSQL_URL = os.getenv(
+        "MYSQL_URL",
+        "mysql+pymysql://nia:nia@localhost:3306/nia?charset=utf8mb4",
+    )
 
     # ── AI 配置 ───────────────────────────────────────────────────
     AI_CACHE_DAYS = int(os.getenv("AI_CACHE_DAYS", "7"))

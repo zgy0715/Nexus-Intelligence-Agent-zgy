@@ -1,10 +1,9 @@
 """统一的时间工具。
 
-所有写入 MongoDB 的时间字段都使用 **naive UTC datetime**（BSON date），
+所有写入 MySQL 的时间字段都使用 **naive UTC datetime**，
 原因：
 1. `datetime.utcnow()` 在 Python 3.12+ 已废弃；
-2. 之前混用 ISO 字符串与 BSON date 导致监测聚合（按时间范围查询）永远匹配不到，
-   因为 MongoDB 不会跨 BSON 类型做范围比较。
+2. 统一使用数据库可比较的日期时间类型，确保监控按 UTC 时间窗口正确统计。
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from datetime import date, datetime, time, timedelta, timezone
 
 
 def utcnow() -> datetime:
-    """当前 UTC 时间（naive），可直接存入 MongoDB。"""
+    """当前 UTC 时间（naive），可直接存入 MySQL DATETIME。"""
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
