@@ -7,13 +7,13 @@
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
 [![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io/)
-[![MongoDB](https://img.shields.io/badge/MongoDB-7-47A248?style=flat&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
+[![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?style=flat&logo=mysql&logoColor=white)](https://www.mysql.com/)
 [![ECharts](https://img.shields.io/badge/ECharts-5.5-AA344D?style=flat&logo=apacheecharts&logoColor=white)](https://echarts.apache.org/)
 [![Zustand](https://img.shields.io/badge/Zustand-5.0-333?style=flat)](https://zustand-demo.pmnd.rs/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V3-4D6BFE?style=flat)](https://platform.deepseek.com/)
 
-下一代智能网络爬虫与情报分析系统 —— 基于 DeepSeek 的**自主爬取 Agent** + 并发爬取引擎，精简到只需 Redis + MongoDB。
+下一代智能网络爬虫与情报分析系统 —— 基于 DeepSeek 的**自主爬取 Agent** + 并发爬取引擎，精简到只需 Redis + MySQL。
 
 ## 核心特性
 
@@ -21,7 +21,7 @@
 - **⚡ 并发爬取引擎** - 异步抓取 + 共享连接池 + 信号量限流 + 退避重试 + 缓存；支持批量 URL 与整站 BFS（相比旧串行实现数量级提速）
 - **多 Provider LLM 支持** - DeepSeek / OpenAI / Qwen / Ollama，一处配置，处处可用；async + tool-calling + 流式
 - **采集与分析一体化** - 内置 RAG 语义检索和自然语言问答
-- **🪶 精简基础设施** - Embedding 走本地 fastembed（ONNX/CPU，无需 Ollama），向量库用本地 FAISS（无需 Docker/Qdrant），只依赖 Redis + MongoDB
+- **🪶 精简基础设施** - Embedding 走本地 fastembed（ONNX/CPU，无需 Ollama），向量库用本地 FAISS（无需 Docker/Qdrant），只依赖 Redis + MySQL
 - **🎨 高级感前端** - React + TypeScript + shadcn 风格组件 + Linear/Vercel 近无彩黑白灰设计 + 明暗双主题（默认暗色）+ ECharts
 
 ## 技术栈
@@ -41,7 +41,7 @@
 | 主力 LLM | DeepSeek-V3 | 便宜、中文强、JSON 输出稳定 |
 | Embedding | fastembed (本地 ONNX) | 默认 `BAAI/bge-small-zh-v1.5`（512 维，约 90MB），CPU 即可，无需 Ollama |
 | 缓存/锁 | Redis | 提取缓存 / SSE |
-| 数据库 | MongoDB | 任务状态、聊天记录、Agent 运行 |
+| 数据库 | MySQL 8 + SQLAlchemy | 任务状态、聊天记录、Agent 运行与抓取内容 |
 | 向量存储 | FAISS (本地) | 语义检索向量索引 |
 
 ## 环境要求
@@ -49,11 +49,11 @@
 - Node.js 18+
 - Python 3.11+
 - Redis 7+（默认端口 **6379**，需自行启动）
-- MongoDB 7+（默认端口 **27017**，需自行启动）
+- MySQL 8+（默认端口 **3306**，需自行启动）
 
 > 无需 Qdrant、Ollama、Docker。
 >
-> MongoDB 未启动时服务仍能启动，但爬取结果与问答历史无法持久化，`GET /api/monitor/stats` 会返回 `degraded: true`。
+> MySQL 未启动时服务仍能启动，但爬取结果与问答历史无法持久化，`GET /api/monitor/stats` 会返回 `degraded: true`。
 
 ## 项目结构
 
@@ -107,7 +107,7 @@ Nexus Intelligence Agent/
 │   │   │   ├── embedding.py          # 嵌入管理器 (fastembed 本地 ONNX)
 │   │   │   ├── vector_store.py       # 向量存储 (FAISS)
 │   │   │   └── rag_engine.py         # RAG 引擎
-│   │   ├── storage/                  # database.py (MongoDB) + models.py
+│   │   ├── storage/                  # database.py (MySQL) + models.py
 │   │   ├── captcha/                  # 验证码识别 (ddddocr, 可选)
 │   │   ├── monitoring/               # 监控报告
 │   │   └── utils/                    # config.py / url_safety.py / timeutil.py
@@ -145,7 +145,7 @@ Nexus Intelligence Agent/
 | GET | /api/settings/config | 系统配置 |
 | GET | /api/settings/status | 服务连接状态 |
 | GET | /api/health | 存活探针，返回 `{status, version}`（不探测外部依赖） |
-| GET | /api/ready | 就绪探针，返回 `{status, mongodb, redis}`，任一依赖不可用时 `status="degraded"` |
+| GET | /api/ready | 就绪探针，返回 `{status, mysql, redis}`，任一依赖不可用时 `status="degraded"` |
 
 > **并发上限**：批量爬取与 Agent 都有并发上限（`MAX_CONCURRENT_CRAWLS`，默认 4），超出时返回 HTTP 429。
 >
@@ -153,9 +153,9 @@ Nexus Intelligence Agent/
 
 `GET /api/monitor/stats` 返回字段：`total_tasks`、`finished_tasks`、`success_rate`、`llm_calls`、`avg_llm_time_ms`、`avg_llm_time`（兼容旧字段）、`avg_crawl_time_ms`、`avg_llm_calls`、`queue_pending`、`dead_letter_count`、`error_summary`、`degraded`。
 
-## MongoDB 集合
+## MySQL 数据表
 
-| 集合名 | 说明 | 索引 |
+| 表名 | 说明 | 索引 |
 |--------|------|------|
 | agent_runs | 自主 Agent 运行记录 | run_id (unique), created_at |
 | crawled_data | 爬取数据 | url, domain, created_at |
@@ -165,6 +165,8 @@ Nexus Intelligence Agent/
 | extraction_rules | 提取规则 (XPath/CSS) | website_id |
 | vector_data | 向量元数据 | crawled_data_id |
 | task_logs | 任务日志 | url, domain, created_at |
+
+> 旧 MongoDB 中已有的数据不会自动转入 MySQL；需要保留历史数据时，请在切换前自行导出并导入对应表。
 
 ## 快速开始
 
@@ -183,11 +185,19 @@ winget install Redis.Redis
 redis-server
 ```
 
-### 4. 安装 MongoDB
+### 4. 安装 MySQL
 
 ```bash
-winget install MongoDB.Server
-mongod --dbpath D:\MongoDB\data
+winget install Oracle.MySQL
+net start MySQL80
+```
+
+首次安装后，用 MySQL 管理员账号创建应用数据库和用户：
+
+```sql
+CREATE DATABASE nia CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER 'nia'@'localhost' IDENTIFIED BY 'nia';
+GRANT ALL PRIVILEGES ON nia.* TO 'nia'@'localhost';
 ```
 
 ### 5. Embedding 模型
@@ -224,12 +234,15 @@ npm install
 copy .env.example .env
 ```
 
-编辑 `backend/.env`，只需填入你的 DeepSeek API Key：
+编辑 `backend/.env`，填入 DeepSeek API Key，并按本机 MySQL 用户更新 `MYSQL_URL`：
 
 ```env
 LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=your-deepseek-api-key
+MYSQL_URL=mysql+pymysql://nia:nia@localhost:3306/nia?charset=utf8mb4
 ```
+
+本地运行前需先在 MySQL 中创建 `nia` 数据库和对应用户；启动时应用会自动创建业务表。
 
 ### 9. 初始化数据库
 
@@ -241,7 +254,7 @@ python -c "from nia.storage.database import DatabaseManager; db = DatabaseManage
 
 ### 10. 启动
 
-确保 Redis 与 MongoDB 已在运行（Redis 默认 `6379`，MongoDB 默认 `27017`），然后：
+确保 Redis 与 MySQL 已在运行（Redis 默认 `6379`，MySQL 默认 `3306`），然后：
 
 ```bash
 # 终端1: 在 backend 目录下启动后端 API（单进程；用 JS 渲染时不要加 --reload）
@@ -256,7 +269,7 @@ npm run dev
 > ⚠️ **必须单进程运行**（默认即 `workers=1`，不要加 `--workers`）：任务与事件状态保存在进程内存中，多 worker 会导致状态串台。
 > ⚠️ 用 JS 渲染时不要加 `--reload`（reloader 会反复重启浏览器）。
 
-> 💡 启动前可先运行 `python verify.py` 做后端自检。它会检查语法 / 模块导入 / 依赖 / Embedding 维度配置 / RAG 真实冒烟测试（向量化 → FAISS 插入 → 检索）/ Redis、MongoDB 连通性；退出码 `0` = 可启动，`1` = 存在阻断性问题。模型因网络下载失败只报警告（属环境问题），MongoDB 未启动也只警告。
+> 💡 启动前可先运行 `python verify.py` 做后端自检。它会检查语法 / 模块导入 / 依赖 / Embedding 维度配置 / RAG 真实冒烟测试（向量化 → FAISS 插入 → 检索）/ Redis、MySQL 连通性；退出码 `0` = 可启动，`1` = 存在阻断性问题。模型因网络下载失败只报警告（属环境问题），MySQL 未启动也只警告。
 
 ## 可选：API 鉴权
 
@@ -274,7 +287,7 @@ API_AUTH_TOKEN=your-random-token
 docker compose up --build
 ```
 
-会启动 **redis + mongodb + api** 三个服务。api 容器用 `STATIC_DIR=/app/static` 把前端构建产物作为 SPA 挂在 8000 端口（前端路由回落到 `index.html`），因此生产环境只需访问 **http://localhost:8000**。embedding 模型缓存与 FAISS 索引持久化在 `app_data` 卷（容器内 `/app/data`）。仓库已包含 `.dockerignore`（会排除 `backend/.env`，避免真实 API Key 被打进镜像层）；compose 中已移除 qdrant 服务（v2 默认 FAISS，不再需要）。
+会启动 **redis + mysql + api** 三个服务。MySQL 数据持久化在 `mysql_data` 卷；api 容器用 `STATIC_DIR=/app/static` 把前端构建产物作为 SPA 挂在 8000 端口（前端路由回落到 `index.html`），因此生产环境只需访问 **http://localhost:8000**。embedding 模型缓存与 FAISS 索引持久化在 `app_data` 卷（容器内 `/app/data`）。仓库已包含 `.dockerignore`（会排除 `backend/.env`，避免真实 API Key 被打进镜像层）；compose 中已移除 qdrant 服务（v2 默认 FAISS，不再需要）。
 
 ## 更新日志
 
@@ -308,7 +321,7 @@ docker compose up --build
 
 - Embedding：Ollama bge-m3 → **本地 fastembed**（ONNX/CPU，无需 Ollama）
 - 向量库：Qdrant → **本地 FAISS**（无需 Docker）
-- 只依赖 **Redis + MongoDB**；依赖大幅瘦身（移除 scrapy / scrapy-redis / qdrant-client / langchain-ollama）
+- 只依赖 **Redis + MySQL**；依赖大幅瘦身（移除 scrapy / scrapy-redis / qdrant-client / langchain-ollama）
 - 删除死代码：`pipelines.py`、`rule_learner.py`（伪规则学习）、`extraction_pipeline.py`、`spiders/`、`scheduler/` 等
 
 **前端翻新**
@@ -324,5 +337,5 @@ docker compose up --build
 
 ### 2026-06-06 — v1 全面重构（历史）
 
-- 异步爬取 + SSE 实时进度；聊天记录存 MongoDB；URL 安全校验防 SSRF
+- 异步爬取 + SSE 实时进度；聊天记录存 MySQL；URL 安全校验防 SSRF
 - 前端：Recharts → ECharts，赛博朋克暗色 → 明亮主题，新增错误边界

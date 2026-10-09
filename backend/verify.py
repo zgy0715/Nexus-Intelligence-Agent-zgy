@@ -91,7 +91,8 @@ def check_dependencies() -> None:
         ("lxml", "HTML 解析", "pip install lxml"),
         ("cssselect", "HTML 解析（lxml.cssselect）", "pip install cssselect"),
         ("httpx", "抓取 + LLM 调用", "pip install httpx"),
-        ("pymongo", "MongoDB 驱动", "pip install pymongo"),
+        ("sqlalchemy", "MySQL 数据库工具", "pip install SQLAlchemy PyMySQL"),
+        ("pymysql", "MySQL 驱动", "pip install PyMySQL"),
         ("redis", "Redis 驱动", "pip install redis"),
     ]
     for name, hint, fix in required:
@@ -156,7 +157,7 @@ def check_embed_config() -> bool:
 
 
 def check_rag_pipeline() -> bool:
-    """RAG 冒烟测试：加载模型 → 向量化 → 插入 → 检索（不需要 Redis/MongoDB）。"""
+    """RAG 冒烟测试：加载模型 → 向量化 → 插入 → 检索（不需要 Redis/MySQL）。"""
     tmpdir = None
     try:
         import shutil
@@ -233,7 +234,7 @@ def check_rag_pipeline() -> bool:
 
 
 def check_infra() -> None:
-    """MongoDB / Redis 连通性（不阻断启动，但会给出明确警告）。"""
+    """MySQL / Redis 连通性（不阻断启动，但会给出明确警告）。"""
     import asyncio
 
     from nia.storage.database import DatabaseManager
@@ -243,15 +244,15 @@ def check_infra() -> None:
         db = DatabaseManager()
         db.connect()
         db.ping()
-        print(f"{GREEN}OK{RESET}  MongoDB {DIM}{Config.MONGO_URL}{RESET}")
+        print(f"{GREEN}OK{RESET}  MySQL {DIM}{Config.MYSQL_URL}{RESET}")
         try:
             db.init_db()
         finally:
             db.close()
     except Exception as e:
-        print(f"{YELLOW}警告{RESET} MongoDB 不可用 -> {type(e).__name__}: {str(e)[:120]}")
-        print(f"{DIM}    爬取结果与问答历史无法持久化；先启动 mongod 再试{RESET}")
-        _warn("MongoDB 不可用")
+        print(f"{YELLOW}警告{RESET} MySQL 不可用 -> {type(e).__name__}: {str(e)[:120]}")
+        print(f"{DIM}    爬取结果与问答历史无法持久化；请检查 MySQL 服务与 MYSQL_URL{RESET}")
+        _warn("MySQL 不可用")
 
     try:
         import redis as redis_lib
