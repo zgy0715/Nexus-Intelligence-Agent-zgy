@@ -28,15 +28,15 @@ logger = logging.getLogger(__name__)
 
 
 async def _init_storage() -> None:
-    """启动时确保 MongoDB 索引存在；失败只告警，不阻断启动。"""
+    """启动时确保 MySQL 表存在；失败只告警，不阻断启动。"""
     try:
         from nia.storage.database import get_db
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, get_db().init_db)
-        logger.info("MongoDB 索引初始化完成")
+        logger.info("MySQL 表初始化完成")
     except Exception as e:
-        logger.warning(f"MongoDB 初始化失败（服务仍会启动，但部分接口不可用）: {e}")
+        logger.warning(f"MySQL 初始化失败（服务仍会启动，但部分接口不可用）: {e}")
 
 
 @asynccontextmanager
@@ -126,10 +126,10 @@ async def health_check():
 
 @app.get("/api/ready")
 async def readiness_check():
-    """就绪探针：真正探测 MongoDB 与 Redis。"""
-    result = {"status": "ok", "mongodb": False, "redis": False}
+    """就绪探针：真正探测 MySQL 与 Redis。"""
+    result = {"status": "ok", "mysql": False, "redis": False}
 
-    def _ping_mongo() -> bool:
+    def _ping_mysql() -> bool:
         from nia.storage.database import get_db
 
         db = get_db()
@@ -137,9 +137,9 @@ async def readiness_check():
         return True
 
     try:
-        result["mongodb"] = await asyncio.get_running_loop().run_in_executor(None, _ping_mongo)
+        result["mysql"] = await asyncio.get_running_loop().run_in_executor(None, _ping_mysql)
     except Exception as e:
-        logger.warning(f"readiness: mongodb ping failed: {e}")
+        logger.warning(f"readiness: mysql ping failed: {e}")
 
     def _ping_redis() -> bool:
         import redis as redis_lib
@@ -155,7 +155,7 @@ async def readiness_check():
     except Exception as e:
         logger.warning(f"readiness: redis ping failed: {e}")
 
-    if not (result["mongodb"] and result["redis"]):
+    if not (result["mysql"] and result["redis"]):
         result["status"] = "degraded"
     return result
 

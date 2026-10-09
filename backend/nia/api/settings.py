@@ -54,8 +54,7 @@ async def get_config():
             "QDRANT_URL": _redact_uri(Config.QDRANT_URL),
             "QDRANT_COLLECTION": Config.QDRANT_COLLECTION,
             "REDIS_URL": _redact_uri(Config.REDIS_URL),
-            "MONGO_URL": _redact_uri(Config.MONGO_URL),
-            "MONGO_DB": Config.MONGO_DB,
+            "MYSQL_URL": _redact_uri(Config.MYSQL_URL),
             "LOG_LEVEL": Config.LOG_LEVEL,
             "AI_CACHE_DAYS": Config.AI_CACHE_DAYS,
             "EXTRACTION_FAILURE_THRESHOLD": Config.EXTRACTION_FAILURE_THRESHOLD,
@@ -92,14 +91,15 @@ def _probe_redis() -> dict:
         return {"connected": False, "error": str(e)[:200]}
 
 
-def _probe_mongo() -> dict:
+def _probe_mysql() -> dict:
     try:
         db = get_db()
         db.ping()
-        server_info = db._client.server_info()  # noqa: SLF001 - 只为取版本号
-        return {"connected": True, "version": server_info.get("version")}
+        with db.engine.connect() as conn:
+            version = conn.exec_driver_sql("SELECT VERSION()").scalar_one()
+        return {"connected": True, "version": str(version)}
     except Exception as e:
-        logger.info(f"settings: mongo probe failed: {e}")
+        logger.info(f"settings: mysql probe failed: {e}")
         return {"connected": False, "error": str(e)[:200]}
 
 
@@ -140,13 +140,13 @@ def _probe_llm() -> dict:
 @router.get("/status")
 async def get_service_status():
     loop = asyncio.get_running_loop()
-    redis_status, mongodb_status, llm_status = await asyncio.gather(
+    redis_status, mysql_status, llm_status = await asyncio.gather(
         loop.run_in_executor(None, _probe_redis),
-        loop.run_in_executor(None, _probe_mongo),
+        loop.run_in_executor(None, _probe_mysql),
         loop.run_in_executor(None, _probe_llm),
     )
     return {
         "redis": redis_status,
-        "mongodb": mongodb_status,
+        "mysql": mysql_status,
         "llm_provider": llm_status,
     }

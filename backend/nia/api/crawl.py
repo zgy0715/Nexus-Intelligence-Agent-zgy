@@ -1,5 +1,5 @@
 """
-爬取 API — 异步后台任务 + SSE 实时进度 + MongoDB 存储
+爬取 API — 异步后台任务 + SSE 实时进度 + MySQL 存储
 
 注意：进度事件保存在进程内的环形缓冲中，SSE 端以 0.3s 轮询读取。
 旧实现把同步 redis pubsub.get_message(timeout=1.0) 直接放进 async generator，
@@ -71,7 +71,7 @@ class CrawlRequest(BaseModel):
         return v
 
 
-# ── MongoDB 存储 ─────────────────────────────────────────────────
+# ── MySQL 存储 ────────────────────────────────────────────────────
 
 
 def _get_db():
@@ -81,24 +81,22 @@ def _get_db():
 
 
 def _save_task(task: dict) -> None:
-    """保存任务状态到内存 + MongoDB（隐藏内存专用的 history 字段）。"""
+    """保存任务状态到内存 + MySQL（隐藏内存专用的 history 字段）。"""
     task_id = task["task_id"]
     _tasks[task_id] = task
     _gc_tasks()
     try:
         doc = {k: v for k, v in task.items() if k != "history"}
-        _get_db().get_collection("crawl_tasks").update_one(
-            {"task_id": task_id}, {"$set": doc}, upsert=True
-        )
+        _get_db().upsert("crawl_tasks", doc)
     except Exception as e:
-        logger.warning(f"Failed to save task to MongoDB: {e}")
+        logger.warning(f"Failed to save task to MySQL: {e}")
 
 
 def _load_task_from_db(task_id: str) -> dict | None:
     try:
-        return _get_db().get_collection("crawl_tasks").find_one({"task_id": task_id}, {"_id": 0})
+        return _get_db().get("crawl_tasks", task_id=task_id)
     except Exception as e:
-        logger.warning(f"Failed to read task from MongoDB: {e}")
+        logger.warning(f"Failed to read task from MySQL: {e}")
         return None
 
 
@@ -285,12 +283,12 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool) -> None:
                 _publish_progress(task_id, "ai", 80, f"AI 提取失败: {str(e)[:100]}")
                 extraction_method = "failed"
 
-        # Step 4: 存入 MongoDB
+        # Step 4: 存入 MySQL
         _publish_progress(task_id, "store", 85, "保存到数据库...")
         data_id = str(uuid.uuid4())
         domain = urlparse(url).netloc
         try:
-            _get_db().get_collection("crawled_data").insert_one({
+            _get_db().insert("crawled_data", {
                 "id": data_id,
                 "url": url,
                 "domain": domain,
@@ -305,7 +303,7 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool) -> None:
             })
             data_stored = True
         except Exception as e:
-            logger.error(f"MongoDB insert failed: {e}")
+            logger.error(f"MySQL insert failed: {e}")
 
         # Step 5: RAG 索引（失败不影响主流程；只有真的存进库才索引）
         if data_stored:
@@ -366,29 +364,24 @@ async def get_crawl_results(
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=100),
 ):
-    """获取爬取结果列表（从 MongoDB 分页查询）。
+    """获取爬取结果列表（从 MySQL 分页查询）。
 
     注意：本路由必须注册在 `/{task_id}` 之前，否则 "/api/crawl/results"
     会被当成 task_id="results" 匹配掉，永远返回 404。
     """
     try:
-        collection = _get_db().get_collection("crawl_tasks")
-        query = {"status": {"$in": ["completed", "failed"]}}
-        total = collection.count_documents(query)
-        cursor = (
-            collection.find(query, {"_id": 0, "history": 0})
-            .sort("created_at", -1)
-            .skip((page - 1) * page_size)
-            .limit(page_size)
-        )
+        db = _get_db()
+        filters = {"status": ["completed", "failed"]}
+        total = db.count("crawl_tasks", filters=filters)
+        results = db.list("crawl_tasks", filters=filters, order_by="created_at", limit=page_size, offset=(page - 1) * page_size, exclude=("history",))
         return {
-            "results": list(cursor),
+            "results": results,
             "total": total,
             "page": page,
             "page_size": page_size,
         }
     except Exception as e:
-        logger.warning(f"Failed to read results from MongoDB: {e}")
+        logger.warning(f"Failed to read results from MySQL: {e}")
         return {"results": [], "total": 0, "page": page, "page_size": page_size}
 
 
@@ -463,13 +456,13 @@ async def delete_task(task_id: str):
     _tasks.pop(task_id, None)
     _batches.pop(task_id, None)
     try:
-        collection = _get_db().get_collection("crawl_tasks")
-        doc = collection.find_one({"task_id": task_id}, {"url": 1}) or {}
-        result = collection.delete_one({"task_id": task_id})
+        db = _get_db()
+        doc = db.get("crawl_tasks", task_id=task_id) or {}
+        deleted = db.delete("crawl_tasks", filters={"task_id": task_id})
         url = doc.get("url")
         if url:
-            _get_db().get_collection("crawled_data").delete_many({"url": url})
-        if result.deleted_count == 0 and not url:
+            db.delete("crawled_data", filters={"url": url})
+        if deleted == 0 and not url:
             raise HTTPException(404, "任务不存在")
     except HTTPException:
         raise
@@ -504,7 +497,7 @@ def _persist_page(page_url: str, title: str, content: str, raw_html: str = "") -
     """把抓取到的页面存入 crawled_data（同步，executor 中调用）。"""
     data_id = str(uuid.uuid4())
     try:
-        _get_db().get_collection("crawled_data").insert_one({
+        _get_db().insert("crawled_data", {
             "id": data_id,
             "url": page_url,
             "domain": urlparse(page_url).netloc,

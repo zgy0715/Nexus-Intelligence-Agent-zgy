@@ -8,7 +8,7 @@ import time
 
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, field_validator
-from pymongo.errors import PyMongoError
+from sqlalchemy.exc import SQLAlchemyError
 
 from nia.utils.config import Config
 from nia.utils.timeutil import utcnow
@@ -42,29 +42,30 @@ class QueryRequest(BaseModel):
 
 
 async def _run_sync(fn, *args):
-    """把阻塞调用（Mongo/pymongo、向量检索）挪出事件循环。"""
+    """把阻塞调用（MySQL、向量检索）挪出事件循环。"""
     return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
 
 
 async def _save_history(question: str, answer: str, sources: list) -> None:
     def _write():
-        collection = _get_db().get_collection("chat_history")
-        now = utcnow().isoformat()
-        collection.insert_many([
-            {"role": "user", "content": question, "created_at": now},
-            {"role": "assistant", "content": answer, "sources": sources, "created_at": now},
+        from uuid import uuid4
+        collection = _get_db()
+        now = utcnow()
+        collection.insert_many("chat_history", [
+            {"id": str(uuid4()), "role": "user", "content": question, "sources": None, "created_at": now},
+            {"id": str(uuid4()), "role": "assistant", "content": answer, "sources": sources, "created_at": now},
         ])
-        total = collection.count_documents({})
+        total = collection.count("chat_history")
         if total > CHAT_HISTORY_MAX * 2:
             excess = total - CHAT_HISTORY_MAX * 2
-            oldest = collection.find({}, {"_id": 1}).sort("created_at", 1).limit(excess)
-            ids = [doc["_id"] for doc in oldest]
-            if ids:
-                collection.delete_many({"_id": {"$in": ids}})
+            oldest = collection.list("chat_history", order_by="created_at", descending=False, limit=excess)
+            ids = [doc["id"] for doc in oldest]
+            for message_id in ids:
+                collection.delete("chat_history", filters={"id": message_id})
 
     try:
         await _run_sync(_write)
-    except PyMongoError as e:
+    except SQLAlchemyError as e:
         logger.warning(f"Failed to save chat history: {e}")
     except Exception as e:
         logger.warning(f"Failed to save chat history: {e}")
@@ -178,20 +179,14 @@ def close_ai_client() -> None:
 async def get_chat_history(limit: int = Query(50, ge=1, le=200)):
     """获取聊天历史（最新的 N 轮；每轮包含 user + assistant 两条）。"""
     def _read():
-        cursor = (
-            _get_db().get_collection("chat_history")
-            .find({}, {"_id": 0})
-            .sort("created_at", -1)
-            .limit(limit * 2)
-        )
-        messages = list(cursor)
+        messages = _get_db().list("chat_history", order_by="created_at", limit=limit * 2)
         messages.reverse()  # 按时间正序
         return messages
 
     try:
         messages = await _run_sync(_read)
         return {"history": messages, "count": len(messages)}
-    except PyMongoError as e:
+    except SQLAlchemyError as e:
         logger.warning(f"Failed to read chat history: {e}")
         return {"history": [], "count": 0}
 
@@ -200,10 +195,10 @@ async def get_chat_history(limit: int = Query(50, ge=1, le=200)):
 async def clear_chat_history():
     """清空聊天历史"""
     def _clear():
-        return _get_db().get_collection("chat_history").delete_many({}).deleted_count
+        return _get_db().delete("chat_history")
 
     try:
         deleted = await _run_sync(_clear)
         return {"message": "聊天记录已清空", "deleted": deleted}
-    except PyMongoError as e:
+    except SQLAlchemyError as e:
         raise HTTPException(500, f"清空失败: {e}")

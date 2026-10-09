@@ -101,14 +101,12 @@ class AgentRequest(BaseModel):
 
 
 def _persist_run(state: AgentState) -> None:
-    """把 agent run 记录落 MongoDB（同步，快速；失败静默）。"""
+    """把 agent run 记录落 MySQL；失败不影响实时运行。"""
     try:
         from nia.storage.database import get_db
 
         db = get_db()
-        db.get_collection("agent_runs").update_one(
-            {"run_id": state.run_id}, {"$set": state.to_dict()}, upsert=True
-        )
+        db.upsert("agent_runs", state.to_dict())
     except Exception as e:
         logger.warning(f"persist agent run failed: {e}")
 
@@ -232,11 +230,11 @@ async def get_agent_run(run_id: str):
         data = run.state.to_dict()
         data["finished"] = run.finished
         return data
-    # 回退 MongoDB
+    # 回退 MySQL
     try:
         from nia.storage.database import get_db
 
-        doc = get_db().get_collection("agent_runs").find_one({"run_id": run_id}, {"_id": 0})
+        doc = get_db().get("agent_runs", run_id=run_id)
         if doc:
             return doc
     except Exception as e:
@@ -246,17 +244,11 @@ async def get_agent_run(run_id: str):
 
 @router.get("")
 async def list_agent_runs(limit: int = Query(20, ge=1, le=100)):
-    """最近的 Agent 运行记录（MongoDB）。"""
+    """最近的 Agent 运行记录。"""
     try:
         from nia.storage.database import get_db
 
-        cursor = (
-            get_db().get_collection("agent_runs")
-            .find({}, {"_id": 0, "report": 0, "findings": 0})
-            .sort("created_at", -1)
-            .limit(limit)
-        )
-        return {"runs": list(cursor)}
+        return {"runs": get_db().list("agent_runs", order_by="created_at", limit=limit, exclude=("report", "findings"))}
     except Exception as e:
         logger.warning(f"list agent runs failed: {e}")
         return {"runs": []}
