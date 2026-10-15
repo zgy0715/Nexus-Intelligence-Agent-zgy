@@ -101,10 +101,12 @@ async def api_token_guard(request: Request, call_next):
     """可选的简单鉴权：设置 API_AUTH_TOKEN 后，/api/* 需要 X-API-Token 头。
 
     默认空值 = 关闭（保持本地开箱即用）。
+    额外接受 ?token= 查询参数：浏览器 EventSource 无法携带自定义请求头，
+    SSE 端点（/stream、/progress）只能走 query 传 token。
     """
     token = (Config.API_AUTH_TOKEN or "").strip()
     if token and request.url.path.startswith("/api/") and request.url.path != "/api/health":
-        provided = request.headers.get("x-api-token") or ""
+        provided = request.headers.get("x-api-token") or request.query_params.get("token") or ""
         if provided != token:
             return JSONResponse({"detail": "未授权：缺少或错误的 X-API-Token"}, status_code=401)
     return await call_next(request)
@@ -160,7 +162,7 @@ async def readiness_check():
     return result
 
 
-# ── 前端静态文件（生产部署：Docker 镜像内由本服务同端口提供 SPA） ──────────
+# ── 前端静态文件（生产部署：设置 STATIC_DIR 指向 frontend/dist，同端口托管 SPA） ──────────
 # 未设置 STATIC_DIR 或目录不存在时完全跳过，本地开发仍走 Vite 的 5173。
 _static_dir = os.getenv("STATIC_DIR", "")
 if _static_dir and os.path.isdir(_static_dir):

@@ -22,6 +22,16 @@ function authHeaders(): Record<string, string> {
   return API_TOKEN ? { 'X-API-Token': API_TOKEN } : {};
 }
 
+/**
+ * SSE 端点的鉴权 URL。浏览器 EventSource 无法携带自定义请求头，
+ * 后端（app.py api_token_guard）额外接受 ?token= 查询参数。
+ */
+function sseUrl(path: string): string {
+  if (!API_TOKEN) return `${BASE_URL}${path}`;
+  const sep = path.includes('?') ? '&' : '?';
+  return `${BASE_URL}${path}${sep}token=${encodeURIComponent(API_TOKEN)}`;
+}
+
 /** 通用 SSE 订阅（约定终止符 data: [DONE]）。返回清理函数。 */
 function subscribeSSE<T>(
   path: string,
@@ -30,7 +40,7 @@ function subscribeSSE<T>(
   onError: (error: string) => void,
 ): () => void {
   let finished = false;
-  const es = new EventSource(`${BASE_URL}${path}`);
+  const es = new EventSource(sseUrl(path));
   es.onmessage = (event) => {
     if (event.data === '[DONE]') {
       finished = true;
@@ -176,7 +186,7 @@ export const api = {
     onDone: () => void,
     onError: (error: string) => void,
   ): () => void {
-    const eventSource = new EventSource(`${BASE_URL}/crawl/${taskId}/progress`);
+    const eventSource = new EventSource(sseUrl(`/crawl/${taskId}/progress`));
 
     eventSource.onmessage = (event) => {
       if (event.data === '[DONE]') {

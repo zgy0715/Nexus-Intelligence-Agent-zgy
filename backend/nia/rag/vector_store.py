@@ -1,7 +1,7 @@
 """
-向量存储 — 支持 Qdrant (推荐) / FAISS
-Qdrant: 内置过滤、持久化、Docker 一行启动
-FAISS:  纯本地索引，适合小规模场景
+向量存储 — 支持 FAISS（默认，纯本地）/ Qdrant（可选）
+FAISS:  零依赖本地索引，适合单机场景；序列化读写规避 Windows 非 ASCII 路径问题
+Qdrant: 内置过滤、持久化，适合多实例部署
 """
 
 import json
@@ -292,7 +292,11 @@ class FAISSVectorStore(BaseVectorStore):
         os.makedirs(self._index_dir, exist_ok=True)
         import faiss
 
-        faiss.write_index(self._index, self._index_path)
+        # faiss.write_index 走 C 层 fopen，在 Windows 上无法处理含非 ASCII 字符的
+        # 路径（如中文项目目录）。serialize 成字节流后用 Python open() 写盘绕开。
+        data = faiss.serialize_index(self._index)
+        with open(self._index_path, "wb") as f:
+            f.write(np.asarray(data).tobytes())
         with open(self._metadata_path, "w", encoding="utf-8") as f:
             json.dump(self._metadata, f, ensure_ascii=False, indent=2)
 
@@ -304,7 +308,10 @@ class FAISSVectorStore(BaseVectorStore):
         ):
             return False
         try:
-            self._index = faiss.read_index(self._index_path)
+            # 对应 _save_index 的 serialize 写盘格式（绕开 faiss C 层 fopen 的
+            # Windows 非 ASCII 路径问题）
+            with open(self._index_path, "rb") as f:
+                self._index = faiss.deserialize_index(np.frombuffer(f.read(), dtype=np.uint8))
             with open(self._metadata_path, "r", encoding="utf-8") as f:
                 self._metadata = json.load(f)
             if not isinstance(self._metadata, list):

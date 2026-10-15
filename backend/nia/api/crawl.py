@@ -184,20 +184,42 @@ def _sync_fetch(url: str, use_js: bool) -> str:
     ) as client:
         current = url
         for _ in range(5):
-            resp = client.get(current)
-            if resp.status_code in (301, 302, 303, 307, 308):
-                location = resp.headers.get("location")
-                if not location:
-                    raise RuntimeError(f"重定向缺少 Location (HTTP {resp.status_code})")
-                current = urljoin(current, location)
-                ok, reason = is_safe_url(current, resolve=True)
-                if not ok:
-                    raise ValueError(f"重定向目标不合法：{reason}")
-                continue
-            resp.raise_for_status()
-            if len(resp.content) > max_bytes:
-                return resp.text[:max_bytes]
-            return resp.text
+            # 流式读取：先看 Content-Length，再按上限截断，避免大文件/解压炸弹整页进内存
+            with client.stream("GET", current) as resp:
+                if resp.status_code in (301, 302, 303, 307, 308):
+                    location = resp.headers.get("location")
+                    if not location:
+                        raise RuntimeError(f"重定向缺少 Location (HTTP {resp.status_code})")
+                    current = urljoin(current, location)
+                    ok, reason = is_safe_url(current, resolve=True)
+                    if not ok:
+                        raise ValueError(f"重定向目标不合法：{reason}")
+                    continue
+                resp.raise_for_status()
+                declared = resp.headers.get("content-length")
+                if declared and declared.isdigit() and int(declared) > max_bytes:
+                    raise RuntimeError(f"响应体过大: {declared} 字节（上限 {max_bytes}）")
+                buf = bytearray()
+                truncated = False
+                for chunk in resp.iter_bytes():
+                    if not chunk:
+                        continue
+                    remaining = max_bytes - len(buf)
+                    if remaining <= 0:
+                        truncated = True
+                        break
+                    if len(chunk) > remaining:
+                        buf.extend(chunk[:remaining])
+                        truncated = True
+                        break
+                    buf.extend(chunk)
+                if truncated:
+                    logger.info("响应体超过上限已截断: %s (%d 字节)", current, max_bytes)
+                encoding = resp.encoding or "utf-8"
+                try:
+                    return bytes(buf).decode(encoding, errors="replace")
+                except (LookupError, UnicodeDecodeError):
+                    return bytes(buf).decode("utf-8", errors="replace")
         raise RuntimeError("重定向次数过多")
 
 
@@ -298,7 +320,7 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool) -> None:
                 "extracted_data": extracted_data,
                 "extraction_method": extraction_method,
                 "dom_hash": "",
-                "metadata": {},
+                "metadata": {"task_id": task_id},
                 "created_at": utcnow(),
             })
             data_stored = True
@@ -420,9 +442,11 @@ async def stream_progress(task_id: str):
     if task_id not in _tasks and task_id in _batches:
         # 批量任务的事件流复用 /batch/{id}/stream
         return await stream_batch(task_id)
+
+    db_doc: dict | None = None
     if task_id not in _tasks:
-        doc = await asyncio.get_running_loop().run_in_executor(None, _load_task_from_db, task_id)
-        if doc is None:
+        db_doc = await asyncio.get_running_loop().run_in_executor(None, _load_task_from_db, task_id)
+        if db_doc is None:
             raise HTTPException(404, "任务不存在")
 
     async def event_generator() -> AsyncGenerator[str, None]:
@@ -438,6 +462,20 @@ async def stream_progress(task_id: str):
                 if task.get("status") in ("completed", "failed"):
                     yield "data: [DONE]\n\n"
                     return
+            elif db_doc is not None:
+                # 内存里没有该任务（后端重启过）：
+                # 已结束的任务直接补发终态；进行中的任务状态已丢失，如实告知并结束，
+                # 避免客户端空等 15 分钟超时。
+                final = {"step": "done" if db_doc.get("status") == "completed" else "error",
+                         "progress": 100, "message": ""}
+                if db_doc.get("status") in ("completed", "failed"):
+                    final["message"] = f"任务已结束（{db_doc.get('status')}，来自数据库）"
+                else:
+                    final["step"] = "error"
+                    final["message"] = "后端已重启，该任务的进行中状态已丢失，请重新提交"
+                yield f"data: {json.dumps(final, ensure_ascii=False)}\n\n"
+                yield "data: [DONE]\n\n"
+                return
             if time.monotonic() > deadline:
                 yield "event: timeout\ndata: [DONE]\n\n"
                 return
@@ -452,23 +490,65 @@ async def stream_progress(task_id: str):
 
 @router.delete("/{task_id}")
 async def delete_task(task_id: str):
-    """删除任务（同时清理其落库数据与向量索引）。"""
+    """删除任务（同时清理其落库数据与向量索引）。
+
+    数据清理按任务关联精确删除：单任务用 data_id，批量/新任务用
+    metadata.task_id；仅在找不到任何关联数据时才按 URL 兜底（兼容旧数据），
+    避免误删其它任务抓到的同 URL 页面。
+    """
     _tasks.pop(task_id, None)
     _batches.pop(task_id, None)
-    try:
+
+    def _cleanup() -> dict:
+        from sqlalchemy import func, select
+
         db = _get_db()
         doc = db.get("crawl_tasks", task_id=task_id) or {}
+        table = db.table("crawled_data")
+        data_ids: set[str] = set()
+        if doc.get("data_id"):
+            data_ids.add(doc["data_id"])
+        # 新数据：metadata.task_id 关联（批量任务 / 单任务统一）
+        marker = func.json_unquote(func.json_extract(table.c["metadata"], "$.task_id"))
+        with db.engine.connect() as conn:
+            rows = conn.execute(select(table.c.id).where(marker == task_id)).all()
+        data_ids.update(r[0] for r in rows)
+
         deleted = db.delete("crawl_tasks", filters={"task_id": task_id})
-        url = doc.get("url")
-        if url:
-            db.delete("crawled_data", filters={"url": url})
-        if deleted == 0 and not url:
-            raise HTTPException(404, "任务不存在")
+        if not data_ids and doc.get("url"):
+            # 旧数据兜底：按 URL 关联
+            with db.engine.connect() as conn:
+                rows = conn.execute(select(table.c.id).where(table.c.url == doc["url"])).all()
+            data_ids.update(r[0] for r in rows)
+
+        for did in data_ids:
+            db.delete("crawled_data", filters={"id": did})
+            db.delete("vector_data", filters={"crawled_data_id": did})
+
+        # 同步清理向量索引（FAISS 内存索引重建 + 落盘）
+        if data_ids:
+            try:
+                from nia.rag.vector_store import get_vector_store
+
+                store = get_vector_store()
+                for did in data_ids:
+                    store.delete_vectors(did)
+            except Exception as e:
+                logger.warning(f"vector cleanup skipped for {len(data_ids)} docs: {e}")
+
+        if deleted == 0 and not doc and not data_ids:
+            return {"found": False}
+        return {"found": True, "deleted_data": len(data_ids)}
+
+    try:
+        res = await asyncio.get_running_loop().run_in_executor(None, _cleanup)
     except HTTPException:
         raise
     except Exception as e:
         raise HTTPException(500, f"删除失败: {e}")
-    return {"message": "已删除"}
+    if not res.get("found"):
+        raise HTTPException(404, "任务不存在")
+    return {"message": "已删除", "deleted_data": res.get("deleted_data", 0)}
 
 
 # ── 并发批量 / 整站爬取（CrawlEngine） ──────────────────────────────
@@ -493,8 +573,12 @@ class BatchCrawlRequest(BaseModel):
         return cleaned
 
 
-def _persist_page(page_url: str, title: str, content: str, raw_html: str = "") -> str:
-    """把抓取到的页面存入 crawled_data（同步，executor 中调用）。"""
+def _persist_page(page_url: str, title: str, content: str, raw_html: str = "", task_id: str = "") -> str:
+    """把抓取到的页面存入 crawled_data（同步，executor 中调用）。
+
+    metadata.task_id 记录数据归属，删除任务时据此精确清理，避免误删
+    其它任务抓到的同 URL 数据。
+    """
     data_id = str(uuid.uuid4())
     try:
         _get_db().insert("crawled_data", {
@@ -507,7 +591,7 @@ def _persist_page(page_url: str, title: str, content: str, raw_html: str = "") -
             "extracted_data": {},
             "extraction_method": "batch",
             "dom_hash": "",
-            "metadata": {},
+            "metadata": {"task_id": task_id} if task_id else {},
             "created_at": utcnow(),
         })
     except Exception as e:
@@ -541,7 +625,9 @@ async def _run_batch(task_id: str, req: "BatchCrawlRequest") -> None:
 
     async def on_page(page):
         # 持久化放到线程池，避免阻塞事件循环
-        await loop.run_in_executor(None, _persist_page, page.url, page.title, page.text)
+        await loop.run_in_executor(
+            None, _persist_page, page.url, page.title, page.text, "", task_id
+        )
 
     cfg = CrawlConfig(
         max_depth=req.max_depth,

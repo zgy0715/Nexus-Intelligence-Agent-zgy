@@ -44,6 +44,7 @@ class CrawlEngine:
         pages: list[dict] = []
         findings: list[Finding] = []
         seen_content: set[str] = set()
+        dup_count = 0
         page_errors = 0
 
         async def emit(event: str, **data):
@@ -78,6 +79,7 @@ class CrawlEngine:
                         # 正文去重：镜像页/分页参数变体不再重复提取与存储
                         digest = hashlib.sha1(page.text.encode("utf-8", "ignore")).hexdigest()
                         if digest in seen_content:
+                            dup_count += 1
                             await emit("page_duplicate", url=page.url, title=page.title)
                             continue
                         seen_content.add(digest)
@@ -140,7 +142,7 @@ class CrawlEngine:
             "pages_crawled": len(pages),
             "findings": len(findings),
             "page_errors": page_errors,
-            "duplicates": len(seen_content) - len(pages),
+            "duplicates": dup_count,
             "skipped": frontier.skipped,
             "elapsed": round(time.monotonic() - start, 2),
         }

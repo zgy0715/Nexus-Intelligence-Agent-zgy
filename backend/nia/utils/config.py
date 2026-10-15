@@ -77,8 +77,20 @@ class Config:
     QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "nia_vectors")
     # 相对路径按 backend/ 解析（见 nia/rag/vector_store.py）
     FAISS_INDEX_PATH = os.getenv("FAISS_INDEX_PATH", "./data/faiss_index")
-    # 未显式设置时按 EMBED_MODEL 自动推导维度，避免换模型后维度错配
-    EMBED_DIM = int(os.getenv("EMBED_DIM") or FASTEMBED_MODEL_DIMS.get(EMBED_MODEL, 512))
+    # 未显式设置时按 EMBED_MODEL 自动推导维度，避免换模型后维度错配。
+    # 推导表只覆盖 fastembed 内置模型；远程/本地其余模型（如 OpenAI 系列）
+    # 维度各异，必须显式设置，否则错配要等到写入 FAISS 时才暴露。
+    _EMBED_DIM_ENV = (os.getenv("EMBED_DIM") or "").strip()
+    if not _EMBED_DIM_ENV:
+        _derived = FASTEMBED_MODEL_DIMS.get(EMBED_MODEL)
+        if _derived is None and EMBED_PROVIDER in ("openai", "bge-m3"):
+            raise ValueError(
+                f"EMBED_MODEL={EMBED_MODEL!r} 不在维度推导表中且 EMBED_PROVIDER={EMBED_PROVIDER}。"
+                f"请显式设置 EMBED_DIM（该模型的向量维度），否则 FAISS 索引会维度错配。"
+            )
+        EMBED_DIM = _derived or 512
+    else:
+        EMBED_DIM = int(_EMBED_DIM_ENV)
 
     # ── 基础设施 ──────────────────────────────────────────────────
     REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
