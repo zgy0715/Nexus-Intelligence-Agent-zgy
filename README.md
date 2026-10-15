@@ -59,6 +59,8 @@
 
 ```
 Nexus Intelligence Agent/
+├── README.md                         # 项目说明
+├── 运行步骤.md                        # 运行指南
 ├── frontend/                         # React 前端
 │   ├── src/
 │   │   ├── api/client.ts             # API 客户端 (REST + SSE)
@@ -113,10 +115,9 @@ Nexus Intelligence Agent/
 │   │   └── utils/                    # config.py / url_safety.py / timeutil.py
 │   ├── requirements.txt              # Python 依赖
 │   ├── verify.py                     # 后端自检脚本
+│   ├── scripts/
+│   │   └── diag_agent.py             # Agent 链路诊断脚本
 │   └── .env.example                  # 环境变量模板
-│
-├── README.md                         # 项目说明
-└── 运行步骤.md                        # 运行指南
 ```
 
 ## API 接口
@@ -133,7 +134,7 @@ Nexus Intelligence Agent/
 | POST | /api/crawl/batch/{task_id}/cancel | 取消正在运行的批量爬取（SSE 收到 `{"event": "cancelled"}` 并以 `cancelled` 状态结束） |
 | GET | /api/crawl/{task_id}/progress | SSE 单任务进度推送 |
 | GET | /api/crawl/results | 获取爬取结果列表（此前被 `/{task_id}` 路由遮蔽恒 404，现已修复） |
-| DELETE | /api/crawl/{task_id} | 删除任务 |
+| DELETE | /api/crawl/{task_id} | 删除任务（按任务归属精确清理数据与向量索引，返回 `deleted_data` 数量） |
 | POST | /api/query | 语义问答 |
 | GET | /api/query/history | 获取问答历史 |
 | DELETE | /api/query/history | 清空聊天记录 |
@@ -273,7 +274,7 @@ npm run dev
 
 ## 可选：API 鉴权
 
-默认不鉴权（仅建议本机使用）。设置环境变量 `API_AUTH_TOKEN` 后，所有 `/api/*` 请求必须携带请求头 `X-API-Token: <值>`，否则返回 401（`/api/health` 除外）：
+默认不鉴权（仅建议本机使用）。设置环境变量 `API_AUTH_TOKEN` 后，所有 `/api/*` 请求必须携带请求头 `X-API-Token: <值>`，否则返回 401（`/api/health` 除外）；SSE 端点（`/stream`、`/progress`）因浏览器 EventSource 无法携带自定义请求头，额外接受 `?token=<值>` 查询参数（前端已自动处理）：
 
 ```env
 API_AUTH_TOKEN=your-random-token
@@ -281,15 +282,20 @@ API_AUTH_TOKEN=your-random-token
 
 前端通过 `VITE_API_TOKEN` 传入同一个值；前端后端地址可用 `VITE_API_BASE_URL` 覆盖（默认 `/api`，开发时由 Vite 代理到 `:8000`）。
 
-## Docker 部署
+## 部署说明
 
-```bash
-docker compose up --build
-```
-
-会启动 **redis + mysql + api** 三个服务。MySQL 数据持久化在 `mysql_data` 卷；api 容器用 `STATIC_DIR=/app/static` 把前端构建产物作为 SPA 挂在 8000 端口（前端路由回落到 `index.html`），因此生产环境只需访问 **http://localhost:8000**。embedding 模型缓存与 FAISS 索引持久化在 `app_data` 卷（容器内 `/app/data`）。仓库已包含 `.dockerignore`（会排除 `backend/.env`，避免真实 API Key 被打进镜像层）；compose 中已移除 qdrant 服务（v2 默认 FAISS，不再需要）。
+本项目**不使用 Docker**，全部本地直接运行（见《运行步骤.md》）。如需生产部署：前端 `npm run build` 后把 `frontend/dist` 作为静态站点托管，并设置后端 `STATIC_DIR` 指向该目录即可由 FastAPI 同端口托管 SPA；公网部署务必设置 `API_AUTH_TOKEN`。
 
 ## 更新日志
+
+### 2026-10-15 — 移除 Docker 与缺陷修复
+
+- **移除 Docker**：删除 `Dockerfile`、`docker-compose.yml`、`.dockerignore`，全部改为本地直接运行
+- **删除修复**：`DELETE /api/crawl/{task_id}` 改为按任务归属（`metadata.task_id` / `data_id`）精确清理数据，不再误删其它任务的同 URL 页面，并同步清理 FAISS 向量索引与 `vector_data`
+- **SSE 鉴权兼容**：浏览器 EventSource 无法携带请求头，后端额外接受 `?token=` 查询参数，前端 SSE 统一携带
+- **FAISS 中文路径修复**：Windows 下项目路径含非 ASCII 字符时 FAISS C 层 fopen 读写失败，改用 `serialize_index` + Python 文件 IO
+- **其它修复**：批量爬取 `duplicates` 统计恒 0；`EMBED_DIM` 对非 fastembed 模型未显式配置时启动报错而非静默错配；后端重启后旧任务 SSE 立即返回终态而非空等超时；单 URL 爬取改流式读取防大文件进内存
+- **目录整理**：诊断脚本移入 `backend/scripts/`，清理 `nia.egg-info` 等构建垃圾
 
 ### 2026-10-09 — 数据库从 MongoDB 迁移到 MySQL
 

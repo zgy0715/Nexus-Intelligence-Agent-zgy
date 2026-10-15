@@ -1,6 +1,6 @@
 """
 Agent 诊断脚本 —— 单独跑通 Agent 链路，定位"启动 Agent 有问题"的根因。
-用法：cd backend && python diag_agent.py
+用法：cd backend && python scripts/diag_agent.py
 """
 
 import asyncio

@@ -56,3 +56,12 @@ backend/data/
 *.tmp
 *.bak
 postgresql-16-binaries.zip
+
+# 本地生成数据（embedding 模型缓存 / FAISS 索引）
+backend/data/
+backend/nia/_data/
+.tmp/
+
+# WorkBuddy 会话数据
+.workbuddy/
+.claude/
