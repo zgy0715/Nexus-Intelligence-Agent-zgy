@@ -52,8 +52,19 @@ export const useStore = create<AppState>()(
   ),
 );
 
-/** 把主题 class 应用到 <html>，在 store 变化时调用。 */
+let _themeTransitionTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** 把主题 class 应用到 <html>，在 store 变化时调用。
+ * v4 修复「有的页面切换快有的慢」：各元素自带过渡不一（有 transition 的渐变、
+ * 没有的瞬变、canvas 即时重绘）。切换时给全站施加统一的颜色过渡 300ms，
+ * 之后移除——不干扰 hover 等常驻动画与 motion 的 transform 动画。 */
 export function applyTheme(theme: Theme) {
   const root = document.documentElement;
   root.classList.toggle("dark", theme === "dark");
+  root.classList.add("theme-transitioning");
+  if (_themeTransitionTimer) clearTimeout(_themeTransitionTimer);
+  _themeTransitionTimer = setTimeout(() => {
+    root.classList.remove("theme-transitioning");
+    _themeTransitionTimer = null;
+  }, 320);
 }

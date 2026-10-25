@@ -161,6 +161,20 @@
   background: hsl(var(--foreground) / 0.14);
 }
 
+/* v4：主题切换的统一过渡——切换瞬间给全站元素施加一致的颜色过渡，
+   320ms 后由 applyTheme 移除（只过渡颜色，不碰 transform，避免干扰 motion） */
+html.theme-transitioning *,
+html.theme-transitioning *::before,
+html.theme-transitioning *::after {
+  transition:
+    background-color 250ms ease,
+    color 250ms ease,
+    border-color 250ms ease,
+    fill 250ms ease,
+    stroke 250ms ease,
+    box-shadow 250ms ease !important;
+}
+
 @layer utilities {
   /* v4：玻璃拟态面板（暗色高级感核心） */
   .glass {
