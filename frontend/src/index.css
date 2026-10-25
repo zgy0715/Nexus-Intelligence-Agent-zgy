@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "tw-animate-css";
 
 /* class 策略的暗色模式（<html class="dark">，由 Zustand 持久化驱动） */
 @custom-variant dark (&:where(.dark, .dark *));
@@ -122,10 +123,11 @@
   body {
     @apply text-foreground antialiased;
     background-color: hsl(var(--background));
-    /* 顶部柔和光晕 + 品牌色微光，制造层次与高级感 */
+    /* v4 暗色高级感：顶部品牌光晕 + 双侧渐变微光 */
     background-image:
-      radial-gradient(48rem 24rem at 50% -8%, hsl(var(--glow) / 0.05), transparent 70%),
-      radial-gradient(36rem 18rem at 88% -4%, hsl(var(--brand) / 0.05), transparent 70%);
+      radial-gradient(52rem 26rem at 50% -8%, hsl(var(--glow) / 0.07), transparent 70%),
+      radial-gradient(38rem 20rem at 88% -4%, hsl(var(--brand) / 0.08), transparent 70%),
+      radial-gradient(30rem 18rem at 4% 2%, hsl(var(--brand) / 0.05), transparent 70%);
     background-attachment: fixed;
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
       "Microsoft YaHei", sans-serif;
@@ -160,6 +162,32 @@
 }
 
 @layer utilities {
+  /* v4：玻璃拟态面板（暗色高级感核心） */
+  .glass {
+    background: hsl(var(--card) / 0.55);
+    backdrop-filter: blur(16px) saturate(150%);
+    border: 1px solid hsl(var(--border) / 0.7);
+  }
+
+  /* v4：发光 CTA（主按钮品牌色光晕） */
+  .glow-cta {
+    box-shadow:
+      0 0 0 1px hsl(var(--brand) / 0.35),
+      0 4px 24px hsl(var(--brand) / 0.35),
+      0 1px 2px hsl(0 0% 0% / 0.3);
+  }
+
+  /* v4：指令台输入卡聚焦渐变描边 */
+  .deck-focus {
+    position: relative;
+  }
+  .deck-focus:focus-within {
+    border-color: hsl(var(--brand) / 0.5);
+    box-shadow:
+      0 0 0 1px hsl(var(--brand) / 0.4),
+      0 0 32px hsl(var(--brand) / 0.12);
+  }
+
   /* 骨架屏微光 */
   .shimmer {
     background: linear-gradient(

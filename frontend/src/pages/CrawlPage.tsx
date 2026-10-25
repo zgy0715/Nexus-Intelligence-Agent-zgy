@@ -1,13 +1,13 @@
 /**
- * 批量 / 整站爬取页面 — 并发抓取多个 URL 或按深度跟随链接，实时进度 + 结构化提取。
- *
- * v3.1 信息架构：左侧固定「启动配置」卡（sticky），右侧结果区（统计条 +
- * 进度/提取 Tab 切换）——配置与结果不再上下堆叠抢视线。
+ * 批量 / 整站爬取（v4）— 指令台 + 全屏接管。
+ * 未开始：居中指令台（发光输入卡 + chips 选项 + 发光 CTA）；
+ * 运行中：指令台收起为状态条（顶部流光进度条 + 数字滚动计数）→ 结果流逐行滑入。
  */
 
 import { useEffect, useRef, useState } from "react";
+import { AnimatePresence, motion, type Variants } from "motion/react";
 import { toast } from "sonner";
-import { Globe, Play, Square, Link2, FileText, CheckCircle2, XCircle, Gauge, LayoutList, Lightbulb } from "lucide-react";
+import { Globe, Play, Square, Link2, CheckCircle2, XCircle, Loader2 } from "lucide-react";
 import { api } from "@/api/client";
 import type { BatchEvent } from "@/types";
 import { Card } from "@/components/ui/Card";
@@ -16,7 +16,8 @@ import { Input, Textarea } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PageHeader } from "@/components/PageHeader";
-import { cn } from "@/lib/utils";
+import { TopProgressBar } from "@/components/TopProgressBar";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
 
 interface PageRow {
   url: string;
@@ -32,6 +33,11 @@ interface FindingRow {
   data?: Record<string, unknown>;
 }
 
+const rowVariants: Variants = {
+  hidden: { opacity: 0, y: 14 },
+  show: (i: number) => ({ opacity: 1, y: 0, transition: { delay: Math.min(i, 8) * 0.05, duration: 0.28, ease: "easeOut" } }),
+};
+
 export default function CrawlPage() {
   const [seeds, setSeeds] = useState("");
   const [instruction, setInstruction] = useState("");
@@ -39,7 +45,6 @@ export default function CrawlPage() {
   const [maxPages, setMaxPages] = useState(20);
   const [sameDomain, setSameDomain] = useState(true);
   const [useJs, setUseJs] = useState(false);
-  const [tab, setTab] = useState<"pages" | "findings">("pages");
 
   const [running, setRunning] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -56,12 +61,6 @@ export default function CrawlPage() {
   useEffect(() => {
     pagesCountRef.current = pages.length;
   }, [pages]);
-
-  // 有提取发现到达时自动切到发现 Tab（用户手动切换后不再打扰）
-  const autoSwitchRef = useRef(true);
-  useEffect(() => {
-    if (autoSwitchRef.current && findings.length > 0) setTab("findings");
-  }, [findings.length]);
 
   const handleEvent = (e: BatchEvent) => {
     switch (e.event) {
@@ -121,8 +120,6 @@ export default function CrawlPage() {
     setPages([]);
     setFindings([]);
     setStats(null);
-    setTab("pages");
-    autoSwitchRef.current = true;
 
     try {
       const { task_id } = await api.batchCrawl({
@@ -163,206 +160,163 @@ export default function CrawlPage() {
     }
   };
 
+  const started = running || pages.length > 0 || findings.length > 0 || !!stats;
+
   return (
-    <div className="mx-auto max-w-7xl p-4 lg:p-6">
+    <div className="mx-auto max-w-5xl p-4 lg:p-6">
       <PageHeader
         icon={Globe}
         title="批量 / 整站爬取"
         subtitle="并发抓取多个 URL 或按深度跟随链接，可选 AI 结构化提取"
       />
 
-      <div className="grid items-start gap-5 lg:grid-cols-[380px_1fr]">
-        {/* ── 左：启动配置（sticky） ── */}
-        <Card className="p-5 lg:sticky lg:top-4">
-          <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-foreground">
-            <Link2 className="h-4 w-4" /> 起始 URL（每行一个）
-          </label>
-          <Textarea
-            value={seeds}
-            onChange={(e) => setSeeds(e.target.value)}
-            placeholder={"https://example.com\nhttps://example.com/page2"}
-            className="min-h-[88px] font-mono text-xs"
-            disabled={running}
-          />
-
-          <label className="mb-1.5 mt-4 flex items-center gap-1.5 text-sm font-medium text-foreground">
-            <FileText className="h-4 w-4" /> 提取指令（可选）
-          </label>
-          <Textarea
-            value={instruction}
-            onChange={(e) => setInstruction(e.target.value)}
-            placeholder="留空只抓正文；填写则对每页做 AI 结构化提取"
-            className="min-h-[72px]"
-            disabled={running}
-          />
-
-          <div className="mt-4 grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">跟随深度</label>
+      {/* 指令台（未开始时居中展示；启动后收起） */}
+      <AnimatePresence initial={false}>
+        {!started && (
+          <motion.div
+            key="deck"
+            initial={{ opacity: 0, y: 16, scale: 0.98 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: -12, scale: 0.98 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+            className="mx-auto max-w-2xl"
+          >
+            <Card className="deck-focus mt-8 p-6 transition-all duration-300">
+              <label className="mb-2 flex items-center gap-1.5 text-sm font-medium text-foreground">
+                <Link2 className="h-4 w-4" /> 起始 URL（每行一个）
+              </label>
+              <Textarea
+                value={seeds}
+                onChange={(e) => setSeeds(e.target.value)}
+                placeholder={"https://www.anthropic.com\nhttps://www.anthropic.com/news"}
+                className="min-h-[96px] border-border/70 bg-background/50 font-mono text-xs"
+                disabled={running}
+              />
+              <label className="mb-2 mt-4 block text-xs font-medium text-muted-foreground">
+                提取指令（可选，填写则对每页做 AI 结构化提取）
+              </label>
               <Input
-                type="number"
-                min={0}
-                max={5}
-                value={maxDepth}
-                onChange={(e) => setMaxDepth(Number(e.target.value))}
+                value={instruction}
+                onChange={(e) => setInstruction(e.target.value)}
+                placeholder="留空只抓正文，如：标题、日期、要点"
                 className="h-9"
                 disabled={running}
               />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs font-medium text-muted-foreground">最大页数</label>
-              <Input
-                type="number"
-                min={1}
-                max={100}
-                value={maxPages}
-                onChange={(e) => setMaxPages(Number(e.target.value))}
-                className="h-9"
-                disabled={running}
-              />
-            </div>
-          </div>
-
-          <div className="mt-3 flex gap-4">
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
-              <input
-                type="checkbox"
-                checked={sameDomain}
-                onChange={(e) => setSameDomain(e.target.checked)}
-                disabled={running}
-                className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-              />
-              仅同域
-            </label>
-            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
-              <input
-                type="checkbox"
-                checked={useJs}
-                onChange={(e) => setUseJs(e.target.checked)}
-                disabled={running}
-                className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-              />
-              JS 渲染
-            </label>
-          </div>
-
-          <div className="mt-5 flex gap-2">
-            {running && (
-              <Button variant="outline" className="flex-1" onClick={handleStop}>
-                <Square className="h-4 w-4" /> 停止
-              </Button>
-            )}
-            <Button className="flex-1" onClick={handleStart} loading={running}>
-              <Play className="h-4 w-4" /> {running ? "爬取中…" : "开始爬取"}
-            </Button>
-          </div>
-        </Card>
-
-        {/* ── 右：结果区 ── */}
-        <div className="space-y-4">
-          {/* 统计条 */}
-          <Card className="flex items-center divide-x divide-border p-4">
-            <div className="flex flex-1 items-center gap-2.5 px-1">
-              <Gauge className="h-4 w-4 text-primary" />
-              <div>
-                <div className="text-lg font-bold leading-5 tabular-nums">{stats?.pages_crawled ?? pages.filter((p) => p.ok).length}</div>
-                <div className="text-[11px] text-muted-foreground">已抓取页面</div>
+              <div className="mt-5 flex flex-wrap items-center gap-4">
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  深度
+                  <Input type="number" min={0} max={5} value={maxDepth} onChange={(e) => setMaxDepth(Number(e.target.value))} className="h-8 w-16" disabled={running} />
+                </label>
+                <label className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                  页数
+                  <Input type="number" min={1} max={100} value={maxPages} onChange={(e) => setMaxPages(Number(e.target.value))} className="h-8 w-16" disabled={running} />
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input type="checkbox" checked={sameDomain} onChange={(e) => setSameDomain(e.target.checked)} disabled={running} className="h-3.5 w-3.5 rounded accent-[hsl(var(--primary))]" />
+                  仅同域
+                </label>
+                <label className="flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                  <input type="checkbox" checked={useJs} onChange={(e) => setUseJs(e.target.checked)} disabled={running} className="h-3.5 w-3.5 rounded accent-[hsl(var(--primary))]" />
+                  JS 渲染
+                </label>
               </div>
-            </div>
-            <div className="flex flex-1 items-center gap-2.5 px-4">
-              <FileText className="h-4 w-4 text-success" />
-              <div>
-                <div className="text-lg font-bold leading-5 tabular-nums">{stats?.findings ?? findings.length}</div>
-                <div className="text-[11px] text-muted-foreground">提取发现</div>
-              </div>
-            </div>
-            <div className="flex flex-1 items-center gap-2.5 px-4">
-              <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
-              <div>
-                <div className="text-lg font-bold leading-5 tabular-nums">{stats ? `${stats.elapsed}s` : "—"}</div>
-                <div className="text-[11px] text-muted-foreground">总耗时</div>
-              </div>
-            </div>
-          </Card>
-
-          {/* Tab：抓取进度 | 提取结果 */}
-          <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
-            {(
-              [
-                { key: "pages", label: `抓取进度（${pages.length}）`, icon: LayoutList },
-                { key: "findings", label: `提取结果（${findings.length}）`, icon: Lightbulb },
-              ] as const
-            ).map((t) => (
-              <button
-                key={t.key}
-                onClick={() => {
-                  setTab(t.key);
-                  autoSwitchRef.current = false; // 用户手动选择后关闭自动切换
-                }}
-                className={cn(
-                  "flex items-center gap-1.5 rounded-[7px] px-3.5 py-1.5 text-sm transition",
-                  tab === t.key
-                    ? "bg-accent font-medium text-accent-foreground"
-                    : "text-muted-foreground hover:text-foreground",
-                )}
+              <Button
+                size="lg"
+                className="glow-cta mt-6 w-full text-base"
+                onClick={handleStart}
+                loading={running}
+                disabled={!seeds.trim()}
               >
-                <t.icon className="h-3.5 w-3.5" />
-                {t.label}
-                {running && tab === t.key && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />}
-              </button>
-            ))}
-          </div>
+                <Play className="h-4 w-4" /> 开始爬取
+              </Button>
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-          <Card className="min-h-[420px] p-3">
-            {tab === "pages" ? (
-              pages.length === 0 ? (
-                <EmptyState icon={Globe} title="尚未开始" description="在左侧填写 URL 并点击「开始爬取」。" />
+      {/* 运行/结果视图（全屏接管） */}
+      <AnimatePresence>
+        {started && (
+          <motion.div
+            key="runtime"
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.3, ease: "easeOut" }}
+            className="space-y-4"
+          >
+            <Card className="overflow-hidden">
+              <TopProgressBar running={running} done={!running && !!stats} />
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 px-5 py-3.5">
+                {running ? (
+                  <span className="flex items-center gap-2 text-sm text-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin text-brand" /> 爬取中…
+                  </span>
+                ) : (
+                  <span className="flex items-center gap-2 text-sm font-medium text-foreground">
+                    <CheckCircle2 className="h-4 w-4 text-success" /> 爬取完成
+                  </span>
+                )}
+                <span className="text-sm text-muted-foreground">
+                  已抓 <AnimatedNumber value={pages.filter((p) => p.ok).length} className="font-semibold tabular-nums text-foreground" /> 页
+                </span>
+                <span className="text-sm text-muted-foreground">
+                  发现 <AnimatedNumber value={findings.length} className="font-semibold tabular-nums text-foreground" /> 条
+                </span>
+                {stats && (
+                  <span className="text-sm text-muted-foreground">
+                    耗时 <span className="font-semibold tabular-nums text-foreground">{stats.elapsed}s</span>
+                  </span>
+                )}
+                <div className="ml-auto flex gap-2">
+                  {running && (
+                    <Button variant="outline" size="sm" onClick={handleStop}>
+                      <Square className="h-3.5 w-3.5" /> 停止
+                    </Button>
+                  )}
+                  {!running && (
+                    <Button variant="outline" size="sm" onClick={() => { setPages([]); setFindings([]); setStats(null); }}>
+                      新任务
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </Card>
+
+            <Card className="min-h-[420px] p-3">
+              {pages.length === 0 && findings.length === 0 ? (
+                <EmptyState icon={Globe} title={running ? "正在启动…" : "尚无结果"} description={running ? "正在抓取第一个页面" : "在指令台填写 URL 并开始爬取"} />
               ) : (
-                <div className="max-h-[560px] space-y-1.5 overflow-auto">
+                <div className="max-h-[600px] space-y-1.5 overflow-auto p-1">
                   {pages.map((p, i) => (
-                    <div
-                      key={`${p.url}-${i}`}
-                      className="flex animate-fade-in items-start gap-2 rounded-lg border border-border bg-background/40 p-2.5"
-                    >
-                      {p.ok ? (
-                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-                      ) : (
-                        <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-                      )}
+                    <motion.div key={`p-${p.url}-${i}`} variants={rowVariants} initial="hidden" animate="show" custom={i}
+                      className="flex items-start gap-2 rounded-lg border border-border/70 bg-background/40 p-2.5">
+                      {p.ok ? <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" /> : <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />}
                       <div className="min-w-0 flex-1">
                         <div className="truncate text-xs font-medium text-foreground">{p.title || p.url}</div>
                         <div className="truncate text-[11px] text-muted-foreground">{p.url}</div>
                         {p.error && <div className="text-[11px] text-destructive">{p.error}</div>}
                       </div>
                       {p.ok && p.chars != null && <Badge variant="outline">{(p.chars / 1000).toFixed(1)}k</Badge>}
-                    </div>
+                    </motion.div>
+                  ))}
+                  {findings.map((f, i) => (
+                    <motion.div key={`f-${f.url}-${i}`} variants={rowVariants} initial="hidden" animate="show" custom={i}
+                      className="rounded-lg border border-success/20 bg-success/5 p-3">
+                      <div className="mb-1 text-sm font-medium text-foreground">{f.title || f.url}</div>
+                      <a href={f.url} target="_blank" rel="noreferrer" className="line-clamp-1 text-xs text-primary hover:underline">{f.url}</a>
+                      {f.data && (
+                        <pre className="mt-1.5 max-h-40 overflow-auto rounded bg-secondary p-2 text-[11px] text-muted-foreground">
+                          {JSON.stringify(f.data, null, 2)}
+                        </pre>
+                      )}
+                    </motion.div>
                   ))}
                 </div>
-              )
-            ) : findings.length === 0 ? (
-              <p className="px-2 py-16 text-center text-sm text-muted-foreground">
-                {instruction.trim() ? "等待提取结果…" : "未填写提取指令，只有抓取进度"}
-              </p>
-            ) : (
-              <div className="max-h-[560px] space-y-2 overflow-auto">
-                {findings.map((f, i) => (
-                  <div key={`${f.url}-${i}`} className="rounded-lg border border-border bg-background/40 p-3">
-                    <div className="mb-1 text-sm font-medium text-foreground">{f.title || f.url}</div>
-                    <a href={f.url} target="_blank" rel="noreferrer" className="line-clamp-1 text-xs text-primary hover:underline">
-                      {f.url}
-                    </a>
-                    {f.data && (
-                      <pre className="mt-1.5 max-h-40 overflow-auto rounded bg-secondary p-2 text-[11px] text-muted-foreground">
-                        {JSON.stringify(f.data, null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
-          </Card>
-        </div>
-      </div>
+              )}
+            </Card>
+          </motion.div>
+        )}
+      </AnimatePresence>
     </div>
   );
 }

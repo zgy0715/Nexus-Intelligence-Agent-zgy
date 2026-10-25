@@ -15,6 +15,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input, Textarea } from "@/components/ui/Input";
 import { PageHeader } from "@/components/PageHeader";
+import { TopProgressBar } from "@/components/TopProgressBar";
 import { Badge } from "@/components/ui/Badge";
 import { BudgetPanel } from "@/features/agent/BudgetPanel";
 import { FindingsPanel } from "@/features/agent/FindingsPanel";
@@ -159,8 +160,10 @@ export default function AgentPage() {
             </div>
           )}
 
-          {/* 状态条：状态 + 取消 */}
-          <div className="flex items-center gap-3 rounded-xl border bg-card/60 px-4 py-2.5">
+          {/* 状态条：进度条 + 状态 + 取消 */}
+          <div className="overflow-hidden rounded-xl border bg-card/60">
+          <TopProgressBar running={running} />
+          <div className="flex items-center gap-3 px-4 py-2.5">
             <Badge variant="outline" className={cn("rounded-full", badge?.className)}>
               {statusText}
             </Badge>
@@ -184,6 +187,7 @@ export default function AgentPage() {
                 <Plus className="h-3.5 w-3.5" /> 新任务
               </Button>
             )}
+          </div>
           </div>
 
           {/* 预算仪表 */}

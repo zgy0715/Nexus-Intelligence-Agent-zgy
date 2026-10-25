@@ -79,6 +79,9 @@ function DetailDialog({ item, onClose }: { item: CrawlResult | null; onClose: ()
     { key: "text" as const, label: "正文", icon: FileText, show: !!detail?.content },
     { key: "html" as const, label: "原始 HTML", icon: FileCode2, show: true },
   ];
+  const visibleTabs = tabs.filter((t) => t.show);
+  // 默认选中 Tab 被隐藏（如批量爬取无结构化数据）时，自动落到第一个可见 Tab
+  const activeTab = visibleTabs.some((t) => t.key === tab) ? tab : visibleTabs[0]?.key ?? "html";
 
   return (
     <Dialog
@@ -106,26 +109,24 @@ function DetailDialog({ item, onClose }: { item: CrawlResult | null; onClose: ()
       </div>
 
       <div className="mb-3 inline-flex rounded-lg border border-border p-0.5">
-        {tabs
-          .filter((t) => t.show)
-          .map((t) => (
-            <button
-              key={t.key}
-              onClick={() => setTab(t.key)}
-              className={cn(
-                "flex items-center gap-1.5 rounded-[7px] px-3 py-1.5 text-xs transition",
-                tab === t.key ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:text-foreground",
-              )}
-            >
-              <t.icon className="h-3 w-3" />
-              {t.label}
-            </button>
-          ))}
+        {visibleTabs.map((t) => (
+          <button
+            key={t.key}
+            onClick={() => setTab(t.key)}
+            className={cn(
+              "flex items-center gap-1.5 rounded-[7px] px-3 py-1.5 text-xs transition",
+              activeTab === t.key ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <t.icon className="h-3 w-3" />
+            {t.label}
+          </button>
+        ))}
       </div>
 
       {detailQuery.isLoading ? (
         <Skeleton className="h-48 w-full" />
-      ) : tab === "data" ? (
+      ) : activeTab === "data" ? (
         <div className="rounded-lg border bg-muted/30 p-3">
           {detail?.extracted_data && Object.keys(detail.extracted_data).length > 0 ? (
             <JsonNode value={detail.extracted_data} />
@@ -133,7 +134,7 @@ function DetailDialog({ item, onClose }: { item: CrawlResult | null; onClose: ()
             <p className="py-6 text-center text-sm text-muted-foreground">无结构化数据</p>
           )}
         </div>
-      ) : tab === "text" ? (
+      ) : activeTab === "text" ? (
         <pre className="max-h-[46vh] overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-xs leading-relaxed">
           {detail?.content || "（无正文）"}
         </pre>
