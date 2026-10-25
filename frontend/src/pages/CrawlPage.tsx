@@ -1,10 +1,13 @@
 /**
- * 批量 / 整站爬取页面 — 并发抓取多个 URL 或按深度跟随链接，实时进度 + 结构化提取
+ * 批量 / 整站爬取页面 — 并发抓取多个 URL 或按深度跟随链接，实时进度 + 结构化提取。
+ *
+ * v3.1 信息架构：左侧固定「启动配置」卡（sticky），右侧结果区（统计条 +
+ * 进度/提取 Tab 切换）——配置与结果不再上下堆叠抢视线。
  */
 
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { Globe, Play, Square, Link2, FileText, CheckCircle2, XCircle, Gauge } from "lucide-react";
+import { Globe, Play, Square, Link2, FileText, CheckCircle2, XCircle, Gauge, LayoutList, Lightbulb } from "lucide-react";
 import { api } from "@/api/client";
 import type { BatchEvent } from "@/types";
 import { Card } from "@/components/ui/Card";
@@ -12,6 +15,8 @@ import { Button } from "@/components/ui/Button";
 import { Input, Textarea } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { PageHeader } from "@/components/PageHeader";
+import { cn } from "@/lib/utils";
 
 interface PageRow {
   url: string;
@@ -34,6 +39,7 @@ export default function CrawlPage() {
   const [maxPages, setMaxPages] = useState(20);
   const [sameDomain, setSameDomain] = useState(true);
   const [useJs, setUseJs] = useState(false);
+  const [tab, setTab] = useState<"pages" | "findings">("pages");
 
   const [running, setRunning] = useState(false);
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -50,6 +56,12 @@ export default function CrawlPage() {
   useEffect(() => {
     pagesCountRef.current = pages.length;
   }, [pages]);
+
+  // 有提取发现到达时自动切到发现 Tab（用户手动切换后不再打扰）
+  const autoSwitchRef = useRef(true);
+  useEffect(() => {
+    if (autoSwitchRef.current && findings.length > 0) setTab("findings");
+  }, [findings.length]);
 
   const handleEvent = (e: BatchEvent) => {
     switch (e.event) {
@@ -109,6 +121,8 @@ export default function CrawlPage() {
     setPages([]);
     setFindings([]);
     setStats(null);
+    setTab("pages");
+    autoSwitchRef.current = true;
 
     try {
       const { task_id } = await api.batchCrawl({
@@ -150,178 +164,187 @@ export default function CrawlPage() {
   };
 
   return (
-    <div className="mx-auto max-w-6xl p-4 lg:p-6">
-      <div className="mb-6 flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary shadow-sm">
-          <Globe className="h-6 w-6 text-primary-foreground" />
-        </div>
-        <div>
-          <h1 className="text-xl font-bold text-foreground">批量 / 整站爬取</h1>
-          <p className="text-sm text-muted-foreground">并发抓取多个 URL，或按深度跟随链接，可选 AI 结构化提取</p>
-        </div>
-      </div>
+    <div className="mx-auto max-w-7xl p-4 lg:p-6">
+      <PageHeader
+        icon={Globe}
+        title="批量 / 整站爬取"
+        subtitle="并发抓取多个 URL 或按深度跟随链接，可选 AI 结构化提取"
+      />
 
-      <Card className="mb-6 p-5">
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-foreground">
-              <Link2 className="h-4 w-4" /> 起始 URL（每行一个）
-            </label>
-            <Textarea
-              value={seeds}
-              onChange={(e) => setSeeds(e.target.value)}
-              placeholder={"https://example.com\nhttps://example.com/page2"}
-              className="min-h-[96px] font-mono text-xs"
-              disabled={running}
-            />
-          </div>
-          <div>
-            <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-foreground">
-              <FileText className="h-4 w-4" /> 提取指令（可选）
-            </label>
-            <Textarea
-              value={instruction}
-              onChange={(e) => setInstruction(e.target.value)}
-              placeholder="留空则只抓取正文；填写则对每页做 AI 结构化提取，如：标题、日期、作者、要点"
-              className="min-h-[96px]"
-              disabled={running}
-            />
-          </div>
-        </div>
+      <div className="grid items-start gap-5 lg:grid-cols-[380px_1fr]">
+        {/* ── 左：启动配置（sticky） ── */}
+        <Card className="p-5 lg:sticky lg:top-4">
+          <label className="mb-1.5 flex items-center gap-1.5 text-sm font-medium text-foreground">
+            <Link2 className="h-4 w-4" /> 起始 URL（每行一个）
+          </label>
+          <Textarea
+            value={seeds}
+            onChange={(e) => setSeeds(e.target.value)}
+            placeholder={"https://example.com\nhttps://example.com/page2"}
+            className="min-h-[88px] font-mono text-xs"
+            disabled={running}
+          />
 
-        <div className="mt-4 flex flex-wrap items-end gap-4">
-          <div>
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">跟随深度</label>
-            <Input
-              type="number"
-              min={0}
-              max={5}
-              value={maxDepth}
-              onChange={(e) => setMaxDepth(Number(e.target.value))}
-              className="h-9 w-24"
-              disabled={running}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-xs font-medium text-muted-foreground">最大页数</label>
-            <Input
-              type="number"
-              min={1}
-              max={100}
-              value={maxPages}
-              onChange={(e) => setMaxPages(Number(e.target.value))}
-              className="h-9 w-24"
-              disabled={running}
-            />
-          </div>
-          <label className="flex h-9 cursor-pointer items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={sameDomain}
-              onChange={(e) => setSameDomain(e.target.checked)}
-              disabled={running}
-              className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-            />
-            仅同域
+          <label className="mb-1.5 mt-4 flex items-center gap-1.5 text-sm font-medium text-foreground">
+            <FileText className="h-4 w-4" /> 提取指令（可选）
           </label>
-          <label className="flex h-9 cursor-pointer items-center gap-2 text-sm text-foreground">
-            <input
-              type="checkbox"
-              checked={useJs}
-              onChange={(e) => setUseJs(e.target.checked)}
-              disabled={running}
-              className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
-            />
-            JS 渲染
-          </label>
-          <div className="ml-auto flex items-center gap-2">
+          <Textarea
+            value={instruction}
+            onChange={(e) => setInstruction(e.target.value)}
+            placeholder="留空只抓正文；填写则对每页做 AI 结构化提取"
+            className="min-h-[72px]"
+            disabled={running}
+          />
+
+          <div className="mt-4 grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">跟随深度</label>
+              <Input
+                type="number"
+                min={0}
+                max={5}
+                value={maxDepth}
+                onChange={(e) => setMaxDepth(Number(e.target.value))}
+                className="h-9"
+                disabled={running}
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs font-medium text-muted-foreground">最大页数</label>
+              <Input
+                type="number"
+                min={1}
+                max={100}
+                value={maxPages}
+                onChange={(e) => setMaxPages(Number(e.target.value))}
+                className="h-9"
+                disabled={running}
+              />
+            </div>
+          </div>
+
+          <div className="mt-3 flex gap-4">
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={sameDomain}
+                onChange={(e) => setSameDomain(e.target.checked)}
+                disabled={running}
+                className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
+              />
+              仅同域
+            </label>
+            <label className="flex cursor-pointer items-center gap-2 text-sm text-foreground">
+              <input
+                type="checkbox"
+                checked={useJs}
+                onChange={(e) => setUseJs(e.target.checked)}
+                disabled={running}
+                className="h-4 w-4 rounded border-border accent-[hsl(var(--primary))]"
+              />
+              JS 渲染
+            </label>
+          </div>
+
+          <div className="mt-5 flex gap-2">
             {running && (
-              <Button variant="outline" onClick={handleStop}>
+              <Button variant="outline" className="flex-1" onClick={handleStop}>
                 <Square className="h-4 w-4" /> 停止
               </Button>
             )}
-            <Button onClick={handleStart} loading={running}>
+            <Button className="flex-1" onClick={handleStart} loading={running}>
               <Play className="h-4 w-4" /> {running ? "爬取中…" : "开始爬取"}
             </Button>
           </div>
-        </div>
-      </Card>
+        </Card>
 
-      {stats && (
-        <div className="mb-6 grid grid-cols-3 gap-3">
-          <Card className="flex items-center gap-3 p-4">
-            <Gauge className="h-5 w-5 text-primary" />
-            <div>
-              <div className="text-xl font-bold text-foreground">{stats.pages_crawled}</div>
-              <div className="text-xs text-muted-foreground">已抓取页面</div>
-            </div>
-          </Card>
-          <Card className="flex items-center gap-3 p-4">
-            <FileText className="h-5 w-5 text-success" />
-            <div>
-              <div className="text-xl font-bold text-foreground">{stats.findings}</div>
-              <div className="text-xs text-muted-foreground">提取发现</div>
-            </div>
-          </Card>
-          <Card className="flex items-center gap-3 p-4">
-            <CheckCircle2 className="h-5 w-5 text-primary" />
-            <div>
-              <div className="text-xl font-bold text-foreground">{stats.elapsed}s</div>
-              <div className="text-xs text-muted-foreground">总耗时</div>
-            </div>
-          </Card>
-        </div>
-      )}
-
-      <div className="grid gap-6 lg:grid-cols-2">
-        {/* 抓取进度 */}
-        <div>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-            抓取进度（{pages.length}）
-            {running && <span className="h-2 w-2 animate-pulse rounded-full bg-success" />}
-          </h2>
-          <Card className="max-h-[520px] min-h-[240px] overflow-auto p-3">
-            {pages.length === 0 ? (
-              <EmptyState icon={Globe} title="尚未开始" description="填写 URL 后点击开始爬取。" />
-            ) : (
-              <div className="space-y-1.5">
-                {pages.map((p, i) => (
-                  <div
-                    key={`${p.url}-${i}`}
-                    className="flex animate-fade-in items-start gap-2 rounded-lg border border-border bg-background/40 p-2.5"
-                  >
-                    {p.ok ? (
-                      <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
-                    ) : (
-                      <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
-                    )}
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-xs font-medium text-foreground">{p.title || p.url}</div>
-                      <div className="truncate text-[11px] text-muted-foreground">{p.url}</div>
-                      {p.error && <div className="text-[11px] text-destructive">{p.error}</div>}
-                    </div>
-                    {p.ok && p.chars != null && (
-                      <Badge variant="outline">{(p.chars / 1000).toFixed(1)}k</Badge>
-                    )}
-                  </div>
-                ))}
+        {/* ── 右：结果区 ── */}
+        <div className="space-y-4">
+          {/* 统计条 */}
+          <Card className="flex items-center divide-x divide-border p-4">
+            <div className="flex flex-1 items-center gap-2.5 px-1">
+              <Gauge className="h-4 w-4 text-primary" />
+              <div>
+                <div className="text-lg font-bold leading-5 tabular-nums">{stats?.pages_crawled ?? pages.filter((p) => p.ok).length}</div>
+                <div className="text-[11px] text-muted-foreground">已抓取页面</div>
               </div>
-            )}
+            </div>
+            <div className="flex flex-1 items-center gap-2.5 px-4">
+              <FileText className="h-4 w-4 text-success" />
+              <div>
+                <div className="text-lg font-bold leading-5 tabular-nums">{stats?.findings ?? findings.length}</div>
+                <div className="text-[11px] text-muted-foreground">提取发现</div>
+              </div>
+            </div>
+            <div className="flex flex-1 items-center gap-2.5 px-4">
+              <CheckCircle2 className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <div className="text-lg font-bold leading-5 tabular-nums">{stats ? `${stats.elapsed}s` : "—"}</div>
+                <div className="text-[11px] text-muted-foreground">总耗时</div>
+              </div>
+            </div>
           </Card>
-        </div>
 
-        {/* 提取结果 */}
-        <div>
-          <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-            提取结果（{findings.length}）
-          </h2>
-          <Card className="max-h-[520px] min-h-[240px] overflow-auto p-3">
-            {findings.length === 0 ? (
-              <p className="px-2 py-12 text-center text-sm text-muted-foreground">
-                {instruction.trim() ? "等待提取结果…" : "未填写提取指令"}
+          {/* Tab：抓取进度 | 提取结果 */}
+          <div className="inline-flex rounded-lg border border-border bg-card p-0.5">
+            {(
+              [
+                { key: "pages", label: `抓取进度（${pages.length}）`, icon: LayoutList },
+                { key: "findings", label: `提取结果（${findings.length}）`, icon: Lightbulb },
+              ] as const
+            ).map((t) => (
+              <button
+                key={t.key}
+                onClick={() => {
+                  setTab(t.key);
+                  autoSwitchRef.current = false; // 用户手动选择后关闭自动切换
+                }}
+                className={cn(
+                  "flex items-center gap-1.5 rounded-[7px] px-3.5 py-1.5 text-sm transition",
+                  tab === t.key
+                    ? "bg-accent font-medium text-accent-foreground"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <t.icon className="h-3.5 w-3.5" />
+                {t.label}
+                {running && tab === t.key && <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-success" />}
+              </button>
+            ))}
+          </div>
+
+          <Card className="min-h-[420px] p-3">
+            {tab === "pages" ? (
+              pages.length === 0 ? (
+                <EmptyState icon={Globe} title="尚未开始" description="在左侧填写 URL 并点击「开始爬取」。" />
+              ) : (
+                <div className="max-h-[560px] space-y-1.5 overflow-auto">
+                  {pages.map((p, i) => (
+                    <div
+                      key={`${p.url}-${i}`}
+                      className="flex animate-fade-in items-start gap-2 rounded-lg border border-border bg-background/40 p-2.5"
+                    >
+                      {p.ok ? (
+                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+                      ) : (
+                        <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                      )}
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-xs font-medium text-foreground">{p.title || p.url}</div>
+                        <div className="truncate text-[11px] text-muted-foreground">{p.url}</div>
+                        {p.error && <div className="text-[11px] text-destructive">{p.error}</div>}
+                      </div>
+                      {p.ok && p.chars != null && <Badge variant="outline">{(p.chars / 1000).toFixed(1)}k</Badge>}
+                    </div>
+                  ))}
+                </div>
+              )
+            ) : findings.length === 0 ? (
+              <p className="px-2 py-16 text-center text-sm text-muted-foreground">
+                {instruction.trim() ? "等待提取结果…" : "未填写提取指令，只有抓取进度"}
               </p>
             ) : (
-              <div className="space-y-2">
+              <div className="max-h-[560px] space-y-2 overflow-auto">
                 {findings.map((f, i) => (
                   <div key={`${f.url}-${i}`} className="rounded-lg border border-border bg-background/40 p-3">
                     <div className="mb-1 text-sm font-medium text-foreground">{f.title || f.url}</div>

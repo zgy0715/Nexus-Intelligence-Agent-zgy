@@ -21,6 +21,7 @@ import {
 import { api } from "@/api/client";
 import type { EChartsCoreOption } from "echarts/core";
 import { Chart, useChartTheme } from "@/components/Chart";
+import { PageHeader } from "@/components/PageHeader";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
@@ -180,19 +181,16 @@ export default function MonitorPage() {
 
   return (
     <div className="mx-auto max-w-7xl p-4 lg:p-6">
-      {/* 标题 */}
-      <div className="mb-6 flex items-center gap-3">
-        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary shadow-sm">
-          <Activity className="h-6 w-6 text-primary-foreground" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <h1 className="text-xl font-bold text-foreground">任务监控</h1>
-          <p className="text-sm text-muted-foreground">系统运行状态与统计图表（每 30 秒自动刷新）</p>
-        </div>
-        <Button variant="outline" size="sm" onClick={() => { statsQuery.refetch(); domainsQuery.refetch(); tsQuery.refetch(); }}>
-          <RefreshCw className="h-4 w-4" /> 刷新
-        </Button>
-      </div>
+      <PageHeader
+        icon={Activity}
+        title="任务监控"
+        subtitle="系统运行状态与统计图表（每 30 秒自动刷新）"
+        actions={
+          <Button variant="outline" size="sm" onClick={() => { statsQuery.refetch(); domainsQuery.refetch(); tsQuery.refetch(); }}>
+            <RefreshCw className="h-4 w-4" /> 刷新
+          </Button>
+        }
+      />
 
       {/* 告警横幅 */}
       {alert && (

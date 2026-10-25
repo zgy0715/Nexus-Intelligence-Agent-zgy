@@ -49,13 +49,35 @@ function SourceList({ sources }: { sources: Source[] }) {
   );
 }
 
+/** 模型链路行：改写（辅助模型）→ 回答（主力模型） */
+function ModelChain({ models }: { models: { answer?: string; rewrite?: string | null } | null }) {
+  if (!models?.answer) return null;
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground">
+      {models.rewrite && (
+        <>
+          <span className="rounded-full border border-brand/40 bg-brand/10 px-1.5 py-px font-mono text-brand">
+            改写 · {models.rewrite}
+          </span>
+          <span>→</span>
+        </>
+      )}
+      <span className="rounded-full border border-border bg-secondary px-1.5 py-px font-mono">
+        回答 · {models.answer}
+      </span>
+    </div>
+  );
+}
+
 function MessageBubble({
   msg,
   streaming,
+  models,
   onRegenerate,
 }: {
   msg: ChatMessage;
   streaming?: boolean;
+  models?: { answer?: string; rewrite?: string | null } | null;
   onRegenerate?: () => void;
 }) {
   const isUser = msg.role === "user";
@@ -78,6 +100,7 @@ function MessageBubble({
             </div>
             {streaming && <span className="mr-0.5 inline-block h-4 w-2 animate-pulse bg-foreground/60 align-middle" />}
             {msg.sources && msg.sources.length > 0 && <SourceList sources={msg.sources} />}
+            {!streaming && <ModelChain models={models ?? null} />}
             {!streaming && onRegenerate && (
               <button
                 onClick={onRegenerate}
@@ -102,6 +125,7 @@ export default function QueryPage() {
   const [input, setInput] = useState("");
   const [streaming, setStreaming] = useState(false);
   const [pending, setPending] = useState<ChatMessage | null>(null);
+  const [pendingModels, setPendingModels] = useState<{ answer?: string; rewrite?: string | null } | null>(null);
   const [lastQuestion, setLastQuestion] = useState("");
   const bottomRef = useRef<HTMLDivElement>(null);
   const abortRef = useRef<(() => void) | null>(null);
@@ -127,6 +151,7 @@ export default function QueryPage() {
       setLastQuestion(question);
       setStreaming(true);
       setPending({ role: "assistant", content: "" });
+      setPendingModels(null);
 
       let finished = false;
       const finish = () => {
@@ -147,6 +172,7 @@ export default function QueryPage() {
         (e) => {
           if (e.type === "sources") {
             setPending((p) => (p ? { ...p, sources: e.sources } : p));
+            setPendingModels(e.models ?? null);
           } else if (e.type === "delta") {
             setPending((p) => (p ? { ...p, content: p.content + e.text } : p));
           } else if (e.type === "done") {
@@ -256,10 +282,7 @@ export default function QueryPage() {
               <MessageBubble msg={{ role: "user", content: lastQuestion }} />
             )}
             {pending && (
-              <MessageBubble
-                msg={pending}
-                streaming={streaming}
-              />
+              <MessageBubble msg={pending} streaming={streaming} models={pendingModels} />
             )}
             {!pending && streaming && (
               <div className="flex justify-start">

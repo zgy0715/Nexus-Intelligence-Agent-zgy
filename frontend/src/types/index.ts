@@ -19,6 +19,8 @@ export interface CrawlResult {
   progress?: number;
   step?: string;
   message?: string;
+  /** 仅 GET /api/data/{id} 详情返回 */
+  raw_html?: string;
 }
 
 export interface Source {
@@ -64,7 +66,14 @@ export interface TimeseriesPoint {
 
 /** POST /api/query/stream 的事件（sources → delta* → done） */
 export type QueryStreamEvent =
-  | { type: 'sources'; sources: Source[]; relevance: number; debug?: Record<string, unknown> }
+  | {
+      type: 'sources';
+      sources: Source[];
+      relevance: number;
+      debug?: Record<string, unknown>;
+      /** v3.1：模型链路（改写=辅助模型，回答=主模型） */
+      models?: { answer?: string; rewrite?: string | null };
+    }
   | { type: 'delta'; text: string }
   | { type: 'done'; mode: 'rag' | 'chat' }
   | { type: 'error'; message: string };
@@ -95,8 +104,8 @@ interface AgentEventBase {
 }
 
 /**
- * 判别式联合：switch (e.type) 时各分支字段类型自动收窄，
- * 替代旧版「所有字段全部可选」的伪联合。
+ * 判别式联合：switch (e.type) 时各分支字段类型自动收窄。
+ * v3.1：带 model 字段（该事件由哪个模型产生）用于时间线模型徽章。
  */
 export type AgentEvent =
   | (AgentEventBase & {
@@ -105,16 +114,19 @@ export type AgentEvent =
       seeds: string[];
       budget_pages: number;
       budget_steps: number;
+      main_model?: string;
+      aux_model?: string;
     })
-  | (AgentEventBase & { type: "thought"; text: string })
-  | (AgentEventBase & { type: "action"; tool: string; args: Record<string, unknown> })
-  | (AgentEventBase & { type: "observation"; tool: string; result: Record<string, unknown> })
+  | (AgentEventBase & { type: "thought"; text: string; model?: string })
+  | (AgentEventBase & { type: "action"; tool: string; args: Record<string, unknown>; model?: string })
+  | (AgentEventBase & { type: "observation"; tool: string; result: Record<string, unknown>; model?: string })
   | (AgentEventBase & {
       type: "finding";
       title: string;
       url: string;
       data?: Record<string, unknown>;
       content: string;
+      model?: string;
     })
   | (AgentEventBase & {
       type: "progress";
@@ -132,6 +144,7 @@ export type AgentEvent =
       saved_tokens: number;
       est_tokens: number;
       count: number;
+      model?: string;
     })
   | (AgentEventBase & {
       type: "finish";
@@ -143,6 +156,7 @@ export type AgentEvent =
       pages_used: number;
       steps_used: number;
       usage?: AgentUsage;
+      model?: string;
     })
   | (AgentEventBase & { type: "error"; message: string });
 
@@ -180,7 +194,22 @@ export interface BatchEvent {
 }
 
 export interface ServiceStatus {
-  redis: { connected: boolean; version?: string };
-  mysql: { connected: boolean; version?: string };
-  llm_provider?: { connected: boolean; provider: string; model: string; models?: string[] };
+  redis: { connected: boolean; version?: string; error?: string };
+  mysql: { connected: boolean; version?: string; error?: string };
+  llm_provider: {
+    connected: boolean;
+    provider: string;
+    model: string;
+    models?: string[];
+    error?: string;
+  };
+  /** v3.1：辅助模型（本地 Ollama 等，角色：摘要/查询改写） */
+  aux_llm?: {
+    connected: boolean;
+    provider: string;
+    model: string;
+    enabled: boolean;
+    role?: string;
+    error?: string;
+  };
 }

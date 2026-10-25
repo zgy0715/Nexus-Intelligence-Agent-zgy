@@ -29,13 +29,15 @@ import { TypewriterText } from "./TypewriterText";
 interface TimelineProps {
   events: AgentEvent[];
   running: boolean;
+  /** 辅助模型名（来自 start 事件）：事件 model 与之匹配时徽章用品牌色标注「本地」 */
+  auxModel?: string;
   className?: string;
 }
 
 /** 进度事件只驱动仪表盘，不进时间线 */
 const isTimelineEvent = (e: AgentEvent) => e.type !== "progress";
 
-export function Timeline({ events, running, className }: TimelineProps) {
+export function Timeline({ events, running, auxModel, className }: TimelineProps) {
   const parentRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
   const rows = events.filter(isTimelineEvent);
@@ -94,7 +96,7 @@ export function Timeline({ events, running, className }: TimelineProps) {
                 transform: `translateY(${vi.start}px)`,
               }}
             >
-              <EventRow event={e} animate={isLast && running} />
+              <EventRow event={e} animate={isLast && running} auxModel={auxModel} />
             </div>
           );
         })}
@@ -123,7 +125,34 @@ export function Timeline({ events, running, className }: TimelineProps) {
 
 // ── 单行渲染 ─────────────────────────────────────────────────────
 
-function EventRow({ event: e, animate }: { event: AgentEvent; animate: boolean }) {
+/** 模型徽章：辅助模型（本地）用品牌色，主力模型用灰色 */
+function ModelBadge({ model, auxModel }: { model?: string; auxModel?: string }) {
+  if (!model) return null;
+  const isAux = !!auxModel && model === auxModel;
+  return (
+    <span
+      className={cn(
+        "shrink-0 rounded-full border px-1.5 py-px font-mono text-[10px] leading-4",
+        isAux
+          ? "border-brand/40 bg-brand/10 text-brand"
+          : "border-border bg-secondary text-muted-foreground",
+      )}
+      title={isAux ? "辅助模型（本地）· 摘要/改写" : "主力模型 · 推理/报告"}
+    >
+      {isAux ? `${model}·本地` : model}
+    </span>
+  );
+}
+
+function EventRow({
+  event: e,
+  animate,
+  auxModel,
+}: {
+  event: AgentEvent;
+  animate: boolean;
+  auxModel?: string;
+}) {
   return (
     <motion.div
       initial={animate ? { opacity: 0, y: 8 } : false}
@@ -132,12 +161,12 @@ function EventRow({ event: e, animate }: { event: AgentEvent; animate: boolean }
       className="px-1 py-1.5"
     >
       {e.type === "start" && <StartRow event={e} />}
-      {e.type === "thought" && <ThoughtRow event={e} />}
-      {e.type === "action" && <ActionRow event={e} />}
-      {e.type === "observation" && <ObservationRow event={e} />}
-      {e.type === "finding" && <FindingRow event={e} />}
-      {e.type === "compaction" && <CompactionRow event={e} />}
-      {e.type === "finish" && <FinishRow event={e} />}
+      {e.type === "thought" && <ThoughtRow event={e} auxModel={auxModel} />}
+      {e.type === "action" && <ActionRow event={e} auxModel={auxModel} />}
+      {e.type === "observation" && <ObservationRow event={e} auxModel={auxModel} />}
+      {e.type === "finding" && <FindingRow event={e} auxModel={auxModel} />}
+      {e.type === "compaction" && <CompactionRow event={e} auxModel={auxModel} />}
+      {e.type === "finish" && <FinishRow event={e} auxModel={auxModel} />}
       {e.type === "error" && <ErrorRow event={e} />}
     </motion.div>
   );
@@ -147,11 +176,13 @@ function RowShell({
   icon,
   tint,
   label,
+  right,
   children,
 }: {
   icon: React.ReactNode;
   tint: string;
   label: string;
+  right?: React.ReactNode;
   children: React.ReactNode;
 }) {
   return (
@@ -160,8 +191,11 @@ function RowShell({
         {icon}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="mb-0.5 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-          {label}
+        <div className="mb-0.5 flex items-center gap-2">
+          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+            {label}
+          </span>
+          {right}
         </div>
         {children}
       </div>
@@ -180,9 +214,9 @@ function StartRow({ event: e }: { event: Extract<AgentEvent, { type: "start" }> 
   );
 }
 
-function ThoughtRow({ event: e, typewriter }: { event: Extract<AgentEvent, { type: "thought" }>; typewriter?: boolean }) {
+function ThoughtRow({ event: e, typewriter, auxModel }: { event: Extract<AgentEvent, { type: "thought" }>; typewriter?: boolean; auxModel?: string }) {
   return (
-    <RowShell icon={<Brain className="h-3.5 w-3.5" />} tint="border-border bg-muted text-foreground" label="思考">
+    <RowShell icon={<Brain className="h-3.5 w-3.5" />} tint="border-border bg-muted text-foreground" label="思考" right={<ModelBadge model={e.model} auxModel={auxModel} />}>
       {typewriter ? (
         <TypewriterText text={e.text} className="text-sm leading-relaxed" />
       ) : (
@@ -194,16 +228,16 @@ function ThoughtRow({ event: e, typewriter }: { event: Extract<AgentEvent, { typ
   );
 }
 
-function ActionRow({ event: e }: { event: Extract<AgentEvent, { type: "action" }> }) {
+function ActionRow({ event: e, auxModel }: { event: Extract<AgentEvent, { type: "action" }>; auxModel?: string }) {
   const argsBrief = formatArgs(e.args);
   return (
-    <RowShell icon={<Wrench className="h-3.5 w-3.5" />} tint="border-blue-500/30 bg-blue-500/10 text-blue-500" label={`动作 · ${e.tool}`}>
+    <RowShell icon={<Wrench className="h-3.5 w-3.5" />} tint="border-blue-500/30 bg-blue-500/10 text-blue-500" label={`动作 · ${e.tool}`} right={<ModelBadge model={e.model} auxModel={auxModel} />}>
       <code className="block truncate font-mono text-xs text-muted-foreground">{argsBrief}</code>
     </RowShell>
   );
 }
 
-function ObservationRow({ event: e }: { event: Extract<AgentEvent, { type: "observation" }> }) {
+function ObservationRow({ event: e, auxModel: _auxModel }: { event: Extract<AgentEvent, { type: "observation" }>; auxModel?: string }) {
   const [open, setOpen] = useState(false);
   const brief = observationBrief(e.result);
   return (
@@ -240,9 +274,9 @@ function ObservationRow({ event: e }: { event: Extract<AgentEvent, { type: "obse
   );
 }
 
-function FindingRow({ event: e }: { event: Extract<AgentEvent, { type: "finding" }> }) {
+function FindingRow({ event: e, auxModel }: { event: Extract<AgentEvent, { type: "finding" }>; auxModel?: string }) {
   return (
-    <RowShell icon={<Lightbulb className="h-3.5 w-3.5" />} tint="border-amber-500/40 bg-amber-500/10 text-amber-500" label="发现">
+    <RowShell icon={<Lightbulb className="h-3.5 w-3.5" />} tint="border-amber-500/40 bg-amber-500/10 text-amber-500" label="发现" right={<ModelBadge model={e.model} auxModel={auxModel} />}>
       <div className="rounded-md border border-amber-500/20 bg-amber-500/5 px-2.5 py-2">
         <p className="text-sm font-medium">{e.title || "（无标题）"}</p>
         {e.url && (
@@ -256,9 +290,9 @@ function FindingRow({ event: e }: { event: Extract<AgentEvent, { type: "finding"
   );
 }
 
-function CompactionRow({ event: e }: { event: Extract<AgentEvent, { type: "compaction" }> }) {
+function CompactionRow({ event: e, auxModel }: { event: Extract<AgentEvent, { type: "compaction" }>; auxModel?: string }) {
   return (
-    <RowShell icon={<Sparkles className="h-3.5 w-3.5" />} tint="border-violet-500/30 bg-violet-500/10 text-violet-500" label="上下文压缩">
+    <RowShell icon={<Sparkles className="h-3.5 w-3.5" />} tint="border-violet-500/30 bg-violet-500/10 text-violet-500" label="上下文压缩" right={<ModelBadge model={e.model} auxModel={auxModel} />}>
       <p className="text-xs text-muted-foreground">
         历史步骤已滚动压缩，释放约 {e.saved_tokens.toLocaleString()} tokens（第 {e.count} 次）
       </p>
@@ -266,9 +300,9 @@ function CompactionRow({ event: e }: { event: Extract<AgentEvent, { type: "compa
   );
 }
 
-function FinishRow({ event: e }: { event: Extract<AgentEvent, { type: "finish" }> }) {
+function FinishRow({ event: e, auxModel }: { event: Extract<AgentEvent, { type: "finish" }>; auxModel?: string }) {
   return (
-    <RowShell icon={<CheckCircle2 className="h-3.5 w-3.5" />} tint="border-emerald-500/40 bg-emerald-500/10 text-emerald-500" label="完成">
+    <RowShell icon={<CheckCircle2 className="h-3.5 w-3.5" />} tint="border-emerald-500/40 bg-emerald-500/10 text-emerald-500" label="完成" right={<ModelBadge model={e.model} auxModel={auxModel} />}>
       <p className="text-sm">
         {e.reason} · {e.finding_count} 条发现 · {e.pages_used} 页
       </p>

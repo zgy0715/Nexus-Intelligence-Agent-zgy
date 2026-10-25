@@ -1,9 +1,13 @@
 /**
- * 布局组件 — 侧边栏 + 顶栏 + 内容区（含暗色切换）
+ * 布局组件 — 侧边栏（分组导航 + 模型状态卡）+ 顶栏 + 内容区。
+ *
+ * v3.1：导航按「采集 / 情报 / 系统」三组分区（功能一目了然），
+ * 底部常驻模型状态卡（主力模型 vs 辅助模型，绿点在线/红点离线）。
  */
 
 import { NavLink, Outlet } from "react-router-dom";
 import { CommandPalette } from "./CommandPalette";
+import { ModelStatusCard, ModelStatusDots } from "./ModelStatusCard";
 import {
   Bot,
   Globe,
@@ -21,13 +25,36 @@ import { useStore } from "../store";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/Button";
 
-const navItems = [
-  { to: "/", icon: Bot, label: "自主 Agent", end: true },
-  { to: "/crawl", icon: Globe, label: "批量爬取" },
-  { to: "/qa", icon: MessageSquare, label: "语义问答" },
-  { to: "/data", icon: Database, label: "数据浏览" },
-  { to: "/monitor", icon: Activity, label: "任务监控" },
-  { to: "/settings", icon: Settings, label: "系统设置" },
+interface NavItem {
+  to: string;
+  icon: React.ElementType;
+  label: string;
+  end?: boolean;
+}
+
+/** 导航分组：采集 → 情报 → 系统 */
+const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
+  {
+    label: "采集",
+    items: [
+      { to: "/", icon: Bot, label: "自主 Agent", end: true },
+      { to: "/crawl", icon: Globe, label: "批量爬取" },
+    ],
+  },
+  {
+    label: "情报",
+    items: [
+      { to: "/qa", icon: MessageSquare, label: "语义问答" },
+      { to: "/data", icon: Database, label: "数据浏览" },
+    ],
+  },
+  {
+    label: "系统",
+    items: [
+      { to: "/monitor", icon: Activity, label: "任务监控" },
+      { to: "/settings", icon: Settings, label: "系统设置" },
+    ],
+  },
 ];
 
 export default function Layout() {
@@ -65,43 +92,48 @@ export default function Layout() {
           )}
         </div>
 
-        {/* 导航 */}
-        <nav className="flex flex-1 flex-col gap-1 px-2 py-4">
-          {navItems.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              onClick={() => {
-                if (window.innerWidth < 1024) setSidebarOpen(false);
-              }}
-              className={({ isActive }) =>
-                cn(
-                  "group flex items-center gap-3 rounded-lg px-3 py-2.5 transition-all duration-200",
-                  !sidebarOpen && "justify-center",
-                  isActive
-                    ? "bg-accent font-medium text-accent-foreground"
-                    : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-                )
-              }
-            >
-              <item.icon size={18} className="shrink-0" />
-              {sidebarOpen && <span className="whitespace-nowrap text-sm">{item.label}</span>}
-            </NavLink>
+        {/* 分组导航 */}
+        <nav className="flex-1 overflow-y-auto px-2 py-3">
+          {NAV_GROUPS.map((group) => (
+            <div key={group.label} className="mb-3">
+              {sidebarOpen ? (
+                <p className="mb-1 px-3 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70">
+                  {group.label}
+                </p>
+              ) : (
+                <div className="mx-auto mb-2 h-px w-6 bg-border" />
+              )}
+              <div className="flex flex-col gap-0.5">
+                {group.items.map((item) => (
+                  <NavLink
+                    key={item.to}
+                    to={item.to}
+                    end={item.end}
+                    onClick={() => {
+                      if (window.innerWidth < 1024) setSidebarOpen(false);
+                    }}
+                    className={({ isActive }) =>
+                      cn(
+                        "group flex items-center gap-3 rounded-lg px-3 py-2 transition-all duration-200",
+                        !sidebarOpen && "justify-center",
+                        isActive
+                          ? "bg-accent font-medium text-accent-foreground"
+                          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+                      )
+                    }
+                  >
+                    <item.icon size={18} className="shrink-0" />
+                    {sidebarOpen && <span className="whitespace-nowrap text-sm">{item.label}</span>}
+                  </NavLink>
+                ))}
+              </div>
+            </div>
           ))}
         </nav>
 
-        {/* 底部状态 */}
-        <div className="shrink-0 border-t border-border px-4 py-3">
-          {sidebarOpen && (
-            <div className="flex items-center gap-2">
-              <span className="relative flex h-2 w-2">
-                <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-success/60" />
-                <span className="relative inline-flex h-2 w-2 rounded-full bg-success" />
-              </span>
-              <span className="text-[11px] text-muted-foreground">系统就绪</span>
-            </div>
-          )}
+        {/* 底部：常驻模型状态卡（主力 vs 辅助，在线/离线） */}
+        <div className="shrink-0 border-t border-border p-2.5">
+          {sidebarOpen ? <ModelStatusCard /> : <ModelStatusDots />}
         </div>
       </aside>
 
