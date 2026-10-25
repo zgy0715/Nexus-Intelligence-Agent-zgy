@@ -316,6 +316,13 @@ API_AUTH_TOKEN=your-random-token
 
 ## 更新日志
 
+### 2026-10-25 — v4 视觉动效改版 + 采集问答闭环修复
+
+- **修复**：批量爬取入库后补建 RAG 索引；Agent 抓取页面落库+索引（此前两者都进不了语义问答）
+- **shadcn/ui 引入**：Button（Radix Slot+CVA，兼容原 loading/primary API）、Dialog（Radix a11y）、tw-animate-css
+- **暗色高级感**：双侧品牌光晕、玻璃拟态（glass）、发光 CTA（glow-cta）、指令台聚焦描边（deck-focus）
+- **爬取页指令台+全屏接管**：未开始居中发光指令卡；启动后收起为状态条（TopProgressBar 流光进度 + AnimatedNumber 数字滚动），结果行 stagger 滑入；AgentPage 运行视图同款进度条
+
 ### 2026-10-25 — v3.1 前端信息架构重设计（模型角色可视化）
 
 - **常驻模型状态卡**：侧边栏底部显示主力模型（推理/报告）与辅助模型（本地，摘要/改写）的名称与在线状态（绿/红点，60s 自动刷新）；侧边栏折叠时收缩为两个状态点
