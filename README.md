@@ -316,6 +316,18 @@ API_AUTH_TOKEN=your-random-token
 
 ## 更新日志
 
+### 2026-10-25 — v3.1 前端信息架构重设计（模型角色可视化）
+
+- **常驻模型状态卡**：侧边栏底部显示主力模型（推理/报告）与辅助模型（本地，摘要/改写）的名称与在线状态（绿/红点，60s 自动刷新）；侧边栏折叠时收缩为两个状态点
+- **事件级模型标注**：Agent 时间线每个事件带模型徽章（思考/动作/发现=主力模型灰标，压缩=辅助模型品牌色标）；`start` 事件携带 `main_model/aux_model`
+- **问答模型链路**：回答气泡底部显示「改写 · qwen3:8b → 回答 · deepseek-chat」（`/api/query/stream` 的 sources 事件新增 `models` 字段）
+- **导航分组**：侧边栏按「采集 / 情报 / 系统」三组分区
+- **Agent 控制台两阶段布局**：「新建任务 | 历史运行」Tab 分离；新建态只显示一张启动卡（一屏一事），运行/完成/回放共用同一运行视图（状态条 + 预算仪表 + 时间线/发现 + 报告）
+- **爬取页左右布局**：左侧 sticky 启动配置卡，右侧统计条 + 「抓取进度/提取结果」Tab 切换
+- **数据页翻新**：迁移 TanStack Query（placeholderData 翻页不闪）；详情改 a11y Dialog（焦点陷阱/Esc），内容三 Tab：结构化数据 JSON 树 / 正文 / 原始 HTML sandbox iframe 预览
+- **设置页重做**：服务状态四卡（Redis/MySQL/主力模型/辅助模型）+ 模型分工双卡 + 配置六组（新增模型组与 RAG 参数组，`AUX_LLM_*` 首次可见）；TanStack Query 化
+- **后端配合**：`/api/settings/config` 暴露 `AUX_LLM_*` 与 RAG 参数；`/api/settings/status` 新增 `aux_llm` 健康探测（复用 60s 缓存）；Agent 事件与流式问答携带模型名
+
 ### 2026-10-25 — v3.0 大改版（Agent 内核 / 混合检索 / 前端 2026 化）
 
 **Agent 内核（backend/nia/agent/）**
