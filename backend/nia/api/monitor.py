@@ -91,3 +91,50 @@ async def check_alert():
     except Exception as e:
         logger.warning(f"monitor alert failed: {e}")
         return {"alert": f"监控检查失败: {str(e)[:200]}"}
+
+
+@router.get("/timeseries")
+async def get_timeseries(days: int = 14):
+    """按天聚合近 N 天的任务量 / 成功率 / LLM 均耗时（监控页时间序列图）。"""
+    def _query():
+        from sqlalchemy import text
+
+        from nia.storage.database import get_db
+
+        engine = get_db().engine
+        sql = text(
+            """
+            SELECT DATE(created_at) AS day,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) AS completed,
+                   AVG(NULLIF(crawl_time_ms, 0)) AS avg_crawl_ms,
+                   SUM(COALESCE(llm_calls, 0)) AS llm_calls
+            FROM crawl_tasks
+            WHERE created_at >= DATE_SUB(CURDATE(), INTERVAL :days DAY)
+            GROUP BY DATE(created_at)
+            ORDER BY day ASC
+            """
+        )
+        with engine.connect() as conn:
+            rows = conn.execute(sql, {"days": int(days)}).mappings().all()
+        return [dict(r) for r in rows]
+
+    try:
+        rows = await _run(_query)
+        series = [
+            {
+                "day": str(r["day"]),
+                "total": int(r.get("total") or 0),
+                "completed": int(r.get("completed") or 0),
+                "success_rate": round(
+                    100.0 * int(r.get("completed") or 0) / int(r["total"]), 2
+                ) if r.get("total") else 0.0,
+                "avg_crawl_ms": round(float(r.get("avg_crawl_ms") or 0), 1),
+                "llm_calls": int(r.get("llm_calls") or 0),
+            }
+            for r in rows
+        ]
+        return {"series": series}
+    except Exception as e:
+        logger.warning(f"monitor timeseries failed: {e}")
+        return {"series": []}

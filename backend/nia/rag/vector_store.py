@@ -158,11 +158,17 @@ class QdrantVectorStore(BaseVectorStore):
         )
 
 
-# ── FAISS 实现（兼容旧版） ──────────────────────────────────────
+# ── FAISS 实现 ──────────────────────────────────────────────────
 
 
 class FAISSVectorStore(BaseVectorStore):
-    """基于 FAISS 的向量存储（兼容旧版，适合小规模场景）。"""
+    """基于 FAISS IndexIDMap2 的向量存储。
+
+    v3：从「向量列表位置即 id」改为 IndexIDMap2 显式 int id ——
+    删除文档变成 ``remove_ids``（O(删除数)），替代旧版
+    reconstruct 全量向量 + 重建整个索引的 O(n) 放大。
+    旧版平面索引文件不再兼容（加载时丢弃，用 /api/admin/reindex 重建）。
+    """
 
     def __init__(self, embedding_dim: int = 1024):
         import faiss
@@ -180,10 +186,15 @@ class FAISSVectorStore(BaseVectorStore):
         self._index_path = os.path.join(self._index_dir, "index.faiss")
         self._metadata_path = os.path.join(self._index_dir, "metadata.json")
         self._lock = threading.Lock()
-        self._metadata: list[dict] = []
+        self._metadata: list[dict] = []  # 每项含 faiss_id（int）
+        self._by_id: dict[int, dict] = {}
+        self._next_id = 1
 
+        self._index = faiss.IndexIDMap2(faiss.IndexFlatIP(self._embedding_dim))
         if not self._load_index():
-            self._index = faiss.IndexFlatIP(self._embedding_dim)
+            self._reset()
+
+    # ── 写入 ─────────────────────────────────────────────────────
 
     def add_vectors(
         self,
@@ -213,21 +224,26 @@ class FAISSVectorStore(BaseVectorStore):
             norms[norms == 0] = 1.0
             embeddings_np = embeddings_np / norms
 
-            self._index.add(embeddings_np)
+            ids = np.arange(self._next_id, self._next_id + len(chunks), dtype=np.int64)
+            self._index.add_with_ids(embeddings_np, ids)
 
-            for idx, chunk in enumerate(chunks):
-                self._metadata.append(
-                    {
-                        "id": str(uuid.uuid4()),
-                        "crawled_data_id": crawled_data_id,
-                        "content_chunk": chunk,
-                        "chunk_index": idx,
-                        "url": url,
-                        "title": title,
-                    }
-                )
+            for faiss_id, idx, chunk in zip(ids, range(len(chunks)), chunks):
+                meta = {
+                    "faiss_id": int(faiss_id),
+                    "id": str(uuid.uuid4()),
+                    "crawled_data_id": crawled_data_id,
+                    "content_chunk": chunk,
+                    "chunk_index": idx,
+                    "url": url,
+                    "title": title,
+                }
+                self._metadata.append(meta)
+                self._by_id[int(faiss_id)] = meta
+            self._next_id += len(chunks)
 
             self._save_index()
+
+    # ── 检索 ─────────────────────────────────────────────────────
 
     def similarity_search(
         self, query_embedding: list[float], top_k: int = 5
@@ -242,14 +258,14 @@ class FAISSVectorStore(BaseVectorStore):
                 query_np = query_np / norm
 
             k = min(top_k, self._index.ntotal)
-            distances, indices = self._index.search(query_np, k)
+            distances, ids = self._index.search(query_np, k)
 
             results = []
             for i in range(k):
-                idx = int(indices[0][i])
-                if idx < 0 or idx >= len(self._metadata):
+                faiss_id = int(ids[0][i])
+                meta = self._by_id.get(faiss_id)
+                if meta is None:
                     continue
-                meta = self._metadata[idx]
                 results.append(
                     {
                         "id": meta["id"],
@@ -266,26 +282,23 @@ class FAISSVectorStore(BaseVectorStore):
         import faiss
 
         with self._lock:
-            keep_indices = [
-                i
-                for i, meta in enumerate(self._metadata)
-                if meta["crawled_data_id"] != crawled_data_id
+            remove_ids = [
+                m["faiss_id"] for m in self._metadata if m["crawled_data_id"] == crawled_data_id
             ]
-            keep_metadata = [self._metadata[i] for i in keep_indices]
+            if not remove_ids:
+                return
+            # IDMap2 支持 remove_ids：O(删除数)，替代旧版全量 reconstruct + 重建
+            self._index.remove_ids(np.array(remove_ids, dtype=np.int64))
+            removed = set(remove_ids)
+            self._metadata = [m for m in self._metadata if m["faiss_id"] not in removed]
+            for fid in removed:
+                self._by_id.pop(fid, None)
+            self._save_index()
 
-            if not keep_indices:
-                self._index = faiss.IndexFlatIP(self._embedding_dim)
-                self._metadata = []
-            else:
-                kept_vectors = np.zeros(
-                    (len(keep_indices), self._embedding_dim), dtype=np.float32
-                )
-                for new_idx, old_idx in enumerate(keep_indices):
-                    kept_vectors[new_idx] = self._index.reconstruct(int(old_idx))
-                self._index = faiss.IndexFlatIP(self._embedding_dim)
-                self._index.add(kept_vectors)
-                self._metadata = keep_metadata
-
+    def clear(self) -> None:
+        """清空索引（reindex 前调用）。"""
+        with self._lock:
+            self._reset()
             self._save_index()
 
     def _save_index(self) -> None:
@@ -298,7 +311,7 @@ class FAISSVectorStore(BaseVectorStore):
         with open(self._index_path, "wb") as f:
             f.write(np.asarray(data).tobytes())
         with open(self._metadata_path, "w", encoding="utf-8") as f:
-            json.dump(self._metadata, f, ensure_ascii=False, indent=2)
+            json.dump({"next_id": self._next_id, "items": self._metadata}, f, ensure_ascii=False)
 
     def _load_index(self) -> bool:
         import faiss
@@ -311,13 +324,21 @@ class FAISSVectorStore(BaseVectorStore):
             # 对应 _save_index 的 serialize 写盘格式（绕开 faiss C 层 fopen 的
             # Windows 非 ASCII 路径问题）
             with open(self._index_path, "rb") as f:
-                self._index = faiss.deserialize_index(np.frombuffer(f.read(), dtype=np.uint8))
-            with open(self._metadata_path, "r", encoding="utf-8") as f:
-                self._metadata = json.load(f)
-            if not isinstance(self._metadata, list):
-                logger.warning("Vector store metadata is not a list, reinitializing")
-                self._reset()
+                index = faiss.deserialize_index(np.frombuffer(f.read(), dtype=np.uint8))
+            if not isinstance(index, faiss.IndexIDMap2):
+                logger.warning(
+                    "检测到旧版平面索引格式（v3 前），已丢弃；请调用 /api/admin/reindex 重建"
+                )
                 return False
+            with open(self._metadata_path, "r", encoding="utf-8") as f:
+                doc = json.load(f)
+            if not isinstance(doc, dict) or "items" not in doc:
+                logger.warning("Vector store metadata format unexpected, reinitializing")
+                return False
+            self._index = index
+            self._metadata = doc["items"]
+            self._next_id = int(doc.get("next_id", 1))
+            self._by_id = {m["faiss_id"]: m for m in self._metadata}
             if self._index.d != self._embedding_dim:
                 logger.warning(
                     f"索引维度 ({self._index.d}) 与当前 EMBED_DIM ({self._embedding_dim}) "
@@ -332,7 +353,7 @@ class FAISSVectorStore(BaseVectorStore):
                 )
                 self._reset()
                 return False
-            logger.info(f"FAISS index loaded: {self._index.ntotal} vectors (dim={self._index.d})")
+            logger.info(f"FAISS index loaded: {self._index.ntotal} vectors (dim={self._index.d}, IDMap2)")
             return True
         except Exception as e:
             logger.warning(f"Failed to load vector store index: {e}")
@@ -342,7 +363,9 @@ class FAISSVectorStore(BaseVectorStore):
         import faiss
 
         self._metadata = []
-        self._index = faiss.IndexFlatIP(self._embedding_dim)
+        self._by_id = {}
+        self._next_id = 1
+        self._index = faiss.IndexIDMap2(faiss.IndexFlatIP(self._embedding_dim))
 
 
 # ── 工厂函数 ─────────────────────────────────────────────────────

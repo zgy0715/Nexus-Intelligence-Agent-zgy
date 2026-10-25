@@ -525,7 +525,7 @@ async def delete_task(task_id: str):
             db.delete("crawled_data", filters={"id": did})
             db.delete("vector_data", filters={"crawled_data_id": did})
 
-        # 同步清理向量索引（FAISS 内存索引重建 + 落盘）
+        # 同步清理向量索引与 BM25（FAISS IDMap2 remove_ids / BM25 重建）
         if data_ids:
             try:
                 from nia.rag.vector_store import get_vector_store
@@ -535,6 +535,14 @@ async def delete_task(task_id: str):
                     store.delete_vectors(did)
             except Exception as e:
                 logger.warning(f"vector cleanup skipped for {len(data_ids)} docs: {e}")
+            try:
+                from nia.rag.bm25 import get_bm25_index
+
+                idx = get_bm25_index()
+                for did in data_ids:
+                    idx.remove(did)
+            except Exception as e:
+                logger.debug(f"bm25 cleanup skipped: {e}")
 
         if deleted == 0 and not doc and not data_ids:
             return {"found": False}

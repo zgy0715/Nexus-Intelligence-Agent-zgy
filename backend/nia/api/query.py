@@ -3,6 +3,7 @@
 """
 
 import asyncio
+import json
 import logging
 import time
 
@@ -151,6 +152,71 @@ async def query_smart(req: QueryRequest):
 
     await _save_history(question, answer, sources)
     return {"answer": answer, "sources": sources, "mode": mode}
+
+
+@router.post("/stream")
+async def query_stream(req: QueryRequest):
+    """流式问答（SSE）：先发 sources（含混合检索 debug 信息），再逐 token 输出答案。
+
+    检索无结果时降级为普通聊天流（mode=chat）。结束后落聊天历史。
+    """
+    from fastapi.responses import StreamingResponse
+
+    async def generator():
+        answer_parts: list[str] = []
+        sources: list = []
+        mode = "chat"
+        try:
+            from nia.rag.rag_engine import aget_rag_engine
+
+            try:
+                engine = await aget_rag_engine()
+                async for chunk in engine.aquery_stream(req.question):
+                    if chunk["type"] == "sources":
+                        sources = chunk.get("sources") or []
+                        mode = "rag"
+                        yield f"data: {json.dumps({'type': 'sources', 'sources': sources, 'relevance': chunk.get('relevance', 0.0), 'debug': chunk.get('debug', {})}, ensure_ascii=False)}\n\n"
+                    elif chunk["type"] == "delta":
+                        answer_parts.append(chunk["text"])
+                        yield f"data: {json.dumps({'type': 'delta', 'text': chunk['text']}, ensure_ascii=False)}\n\n"
+                    elif chunk["type"] == "done":
+                        mode = chunk.get("mode", mode)
+                    elif chunk["type"] == "error":
+                        yield f"data: {json.dumps({'type': 'error', 'message': chunk['message']}, ensure_ascii=False)}\n\n"
+            except asyncio.TimeoutError:
+                yield "data: {\"type\": \"error\", \"message\": \"回答超时\"}\n\n"
+            except Exception as e:
+                logger.warning(f"stream query failed: {e}")
+                yield f"data: {json.dumps({'type': 'error', 'message': str(e)[:200]}, ensure_ascii=False)}\n\n"
+
+            answer = "".join(answer_parts)
+            # 无检索结果的兜底：普通聊天（流式路径引擎已处理；此处只兜 error 空答案）
+            if not answer.strip():
+                try:
+                    llm = _get_ai_client()
+                    answer = await llm.achat(
+                        [
+                            {"role": "system", "content": "你是一个智能助手。用中文回答用户的问题，回答要简洁准确。"},
+                            {"role": "user", "content": req.question},
+                        ],
+                        temperature=0.7,
+                    )
+                    mode = "chat"
+                    yield f"data: {json.dumps({'type': 'delta', 'text': answer}, ensure_ascii=False)}\n\n"
+                except Exception as e:
+                    logger.error(f"LLM chat fallback failed: {e}")
+
+            if answer.strip():
+                await _save_history(req.question, answer, sources)
+            yield f"data: {json.dumps({'type': 'done', 'mode': mode}, ensure_ascii=False)}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
+
+    return StreamingResponse(
+        generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive", "X-Accel-Buffering": "no"},
+    )
 
 
 _ai_client = None

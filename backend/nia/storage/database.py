@@ -161,9 +161,10 @@ class DatabaseManager:
         with self.engine.connect() as conn:
             return self._expand(conn.execute(stmt).mappings().first())
 
-    def list(self, table_name: str, *, filters: dict | None = None, order_by: str | None = None, descending: bool = True, limit: int | None = None, offset: int = 0, exclude: tuple[str, ...] = ()) -> list[dict]:
+    def list(self, table_name: str, *, filters: dict | None = None, order_by: str | None = None, descending: bool = True, limit: int | None = None, offset: int = 0, exclude: tuple[str, ...] = (), columns: tuple[str, ...] | None = None) -> list[dict]:
+        """查询列表。columns 指定时只取这些列（跳过 extra 展开，供轻量读取）。"""
         table = _TABLES[table_name]
-        stmt = select(table)
+        stmt = select(*[table.c[c] for c in columns]) if columns else select(table)
         for key, value in (filters or {}).items():
             column = table.c[key]
             stmt = stmt.where(column.in_(value) if isinstance(value, (list, tuple, set)) else column == value)
@@ -174,7 +175,11 @@ class DatabaseManager:
         if limit is not None:
             stmt = stmt.limit(limit)
         with self.engine.connect() as conn:
-            rows = [self._expand(row) for row in conn.execute(stmt).mappings()]
+            result = conn.execute(stmt).mappings()
+            if columns is not None:
+                rows = [dict(r) for r in result]
+            else:
+                rows = [self._expand(row) for row in result]
         for row in rows:
             for key in exclude:
                 row.pop(key, None)
