@@ -12,6 +12,7 @@ from fastapi.responses import JSONResponse
 # 但 app.py 在 route 模块导入前就需要 CORS_ORIGINS，所以这里显式加载）
 load_dotenv()
 
+from nia.api.admin import router as admin_router
 from nia.api.agent import router as agent_router
 from nia.api.crawl import router as crawl_router
 from nia.api.data import router as data_router
@@ -112,6 +113,7 @@ async def api_token_guard(request: Request, call_next):
     return await call_next(request)
 
 
+app.include_router(admin_router)
 app.include_router(agent_router)
 app.include_router(crawl_router)
 app.include_router(query_router)
