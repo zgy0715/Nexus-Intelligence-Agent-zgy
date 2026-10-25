@@ -231,7 +231,24 @@ def _persist_run(state: AgentState) -> None:
 
 async def _runner(run_id: str) -> None:
     run = _runs[run_id]
-    agent = AutonomousCrawlAgent(run.state, run.config)
+
+    # v3.2：Agent 抓到的页面落库 + RAG 索引（打通「Agent 采集 → 语义问答」闭环）。
+    # metadata.task_id = run_id，删除时可按 run 精确清理；raw_html 留空避免大 HTML 撑库。
+    from nia.api.crawl import _persist_page
+
+    async def on_page(page) -> None:
+        await asyncio.get_running_loop().run_in_executor(
+            None,
+            _persist_page,
+            page.url,
+            page.title,
+            page.text,
+            "",
+            run.state.run_id,
+            "agent",
+        )
+
+    agent = AutonomousCrawlAgent(run.state, run.config, on_page=on_page)
     try:
         async for ev in agent.run():
             _emit(run, ev)

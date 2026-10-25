@@ -581,11 +581,12 @@ class BatchCrawlRequest(BaseModel):
         return cleaned
 
 
-def _persist_page(page_url: str, title: str, content: str, raw_html: str = "", task_id: str = "") -> str:
-    """把抓取到的页面存入 crawled_data（同步，executor 中调用）。
+def _persist_page(page_url: str, title: str, content: str, raw_html: str = "", task_id: str = "", method: str = "batch") -> str:
+    """把抓取到的页面存入 crawled_data 并建立 RAG 索引（同步，executor 中调用）。
 
     metadata.task_id 记录数据归属，删除任务时据此精确清理，避免误删
     其它任务抓到的同 URL 数据。
+    v3.2 修复：旧版只入库不建索引，导致批量爬取的内容语义问答永远查不到。
     """
     data_id = str(uuid.uuid4())
     try:
@@ -597,13 +598,21 @@ def _persist_page(page_url: str, title: str, content: str, raw_html: str = "", t
             "content": content,
             "raw_html": raw_html,
             "extracted_data": {},
-            "extraction_method": "batch",
+            "extraction_method": method,
             "dom_hash": "",
             "metadata": {"task_id": task_id} if task_id else {},
             "created_at": utcnow(),
         })
     except Exception as e:
         logger.warning(f"persist batch page failed: {e}")
+        return data_id
+    # 入库成功即建索引（失败仅告警，不影响爬取主流程）
+    try:
+        from nia.rag.rag_engine import get_rag_engine
+
+        get_rag_engine().index_data(url=page_url, title=title, content=content, crawled_data_id=data_id)
+    except Exception as e:
+        logger.warning(f"batch page RAG indexing failed for {page_url}: {e}")
     return data_id
 
 

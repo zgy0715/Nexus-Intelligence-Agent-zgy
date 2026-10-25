@@ -173,12 +173,15 @@ class ToolExecutor:
         fetcher: AsyncFetcher,
         extractor: StructuredExtractor,
         llm: LLMClient,
+        on_page: Callable[[PageContent], Awaitable[None]] | None = None,
     ):
         self.state = state
         self.config = config
         self.fetcher = fetcher
         self.extractor = extractor
         self.llm = llm
+        # v3.2：页面落库回调（成功抓取并解析后触发，接 crawled_data + RAG 索引管道）
+        self.on_page = on_page
         self._pages: dict[str, PageContent] = {}  # 归一化 url -> 已抓取页面
 
     # ── 内部：抓取+解析（带缓存与预算登记） ──────────────────────
@@ -213,6 +216,12 @@ class ToolExecutor:
             logger.warning(f"parse failed for {norm}: {e}")
             return None
         self._pages[norm] = page
+        # v3.2：落库 + RAG 索引（回调失败只告警，不影响 Agent 运行）
+        if self.on_page is not None:
+            try:
+                await self.on_page(page)
+            except Exception as e:
+                logger.warning(f"agent on_page sink failed for {norm}: {e}")
         return page
 
     async def _summarize(self, page: PageContent) -> str:

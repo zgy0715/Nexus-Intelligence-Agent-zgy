@@ -54,12 +54,14 @@ AGENT_TOOLS = [TOOL_REGISTRY[n].openai_schema() for n in
 
 
 class AutonomousCrawlAgent:
-    def __init__(self, state: AgentState, config: CrawlConfig | None = None):
+    def __init__(self, state: AgentState, config: CrawlConfig | None = None, on_page=None):
         self.state = state
         self.config = config or CrawlConfig()
         self.llm = LLMClient()
         self.ctx = ContextManager()
         self.memory = AgentMemory()
+        # v3.2：页面落库回调（接 crawled_data + RAG 索引管道，由 API 层注入）
+        self.on_page = on_page
         # 事件级模型标注：思考/动作/报告 = 主力模型；压缩/摘要 = 辅助模型（本地）
         try:
             self._main_model = (Config.get_llm_config() or {}).get("model", "")
@@ -108,7 +110,7 @@ class AutonomousCrawlAgent:
             async with AsyncFetcher(self.config) as fetcher:
                 # 复用本 Agent 的 LLM 客户端（extractor 不再各自新建一个）
                 extractor = StructuredExtractor(self.config, llm=self.llm)
-                executor = ToolExecutor(st, self.config, fetcher, extractor, self.llm)
+                executor = ToolExecutor(st, self.config, fetcher, extractor, self.llm, on_page=self.on_page)
 
                 try:
                     while st.budget_left() and not st.cancelled:
