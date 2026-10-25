@@ -52,14 +52,24 @@ class URLFrontier:
     def max_queue(self) -> int:
         return max(self._config.max_pages * 4, 100)
 
-    def _score(self, url: str, depth: int) -> int:
-        """越小越优先：浅层 > 路径短 > 查询参数少。"""
-        path = url.split("://", 1)[-1]
+    def _score(self, url: str, depth: int, anchor: str = "") -> int:
+        """越小越优先：相关性命中 > 浅层 > 路径短 > 查询参数少。
+
+        v3：配置了 goal_keywords 时，锚文本或 URL 命中关键词的链接获得大幅
+        加权（减分）—— Agent/带指令的整站爬取不再被大量无关列表页淹没。
+        """
+        path = url.split("://", 1)[-1].lower()
         path_len = path.count("/")
         query_params = url.count("&") + (1 if "?" in url else 0)
-        return depth * 10000 + path_len * 10 + query_params
+        score = depth * 10000 + path_len * 10 + query_params
+        kws = self._config.goal_keywords
+        if kws:
+            anchor_l = (anchor or "").lower()
+            if any(kw in anchor_l for kw in kws) or any(kw in path for kw in kws):
+                score -= 5000  # 相关性优先于深度，但仍弱于种子层（种子 bias 10000/层）
+        return score
 
-    def add(self, url: str, depth: int, parent: str = "") -> bool:
+    def add(self, url: str, depth: int, parent: str = "", anchor: str = "") -> bool:
         """尝试入队一个 URL。被去重/越界/越权/队列满时返回 False。"""
         if depth > self._config.max_depth:
             return False
@@ -72,16 +82,27 @@ class URLFrontier:
         if len(self._queue) >= self.max_queue:
             self.skipped += 1
             return False
-        heapq.heappush(self._queue, (self._score(norm, depth), next(self._seq), depth, norm, parent))
+        heapq.heappush(self._queue, (self._score(norm, depth, anchor), next(self._seq), depth, norm, parent))
         self.pending.add(norm)
         return True
 
-    def add_many(self, urls: list[str], depth: int, parent: str = "", limit: int | None = None) -> int:
-        """批量入队，最多尝试 limit 个（默认 80）以避免目录页灌爆队列。"""
+    def add_many(
+        self,
+        urls: list[str],
+        depth: int,
+        parent: str = "",
+        limit: int | None = None,
+        anchors: dict[str, str] | None = None,
+    ) -> int:
+        """批量入队，最多尝试 limit 个（默认 80）以避免目录页灌爆队列。
+
+        anchors：URL → 锚文本（来自 parser），供相关性打分。
+        """
         cap = limit if limit is not None else 80
         added = 0
         for u in urls[:cap]:
-            if self.add(u, depth, parent):
+            anchor = (anchors or {}).get(u, "")
+            if self.add(u, depth, parent, anchor=anchor):
                 added += 1
         if len(urls) > cap:
             self.skipped += len(urls) - cap

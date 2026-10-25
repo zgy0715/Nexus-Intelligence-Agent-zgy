@@ -31,6 +31,8 @@ class CrawlConfig:
     per_domain_concurrency: int = field(default_factory=lambda: Config.CRAWL_PER_DOMAIN_CONCURRENCY)
     # 是否遵从 robots.txt
     respect_robots: bool = field(default_factory=lambda: Config.CRAWL_RESPECT_ROBOTS)
+    # v3：目标关键词（Agent/带指令任务传入），用于 frontier 相关性打分
+    goal_keywords: set[str] = field(default_factory=set)
 
 
 @dataclass
@@ -57,6 +59,10 @@ class PageContent:
     text: str = ""
     links: list[str] = field(default_factory=list)
     html: str = ""
+    # v3：锚文本映射（归一化 URL → 首个非空锚文本），供 frontier 相关性打分
+    anchors: dict[str, str] = field(default_factory=dict)
+    # v3：页面元数据（description/author/date/open graph/JSON-LD 摘要）
+    metadata: dict = field(default_factory=dict)
 
 
 @dataclass
