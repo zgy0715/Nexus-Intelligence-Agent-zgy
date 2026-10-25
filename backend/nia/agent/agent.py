@@ -60,6 +60,12 @@ class AutonomousCrawlAgent:
         self.llm = LLMClient()
         self.ctx = ContextManager()
         self.memory = AgentMemory()
+        # 事件级模型标注：思考/动作/报告 = 主力模型；压缩/摘要 = 辅助模型（本地）
+        try:
+            self._main_model = (Config.get_llm_config() or {}).get("model", "")
+        except Exception:
+            self._main_model = ""
+        self._aux_model = (Config.AUX_LLM_MODEL or "") if (Config.AUX_LLM_PROVIDER or "").strip() else self._main_model
 
     async def run(self) -> AsyncGenerator[AgentEvent, None]:
         st = self.state
@@ -83,7 +89,8 @@ class AutonomousCrawlAgent:
             logger.info(f"agent memory hints injected for {seed_domains}")
 
         yield AgentEvent("start", {"goal": st.goal, "seeds": st.seeds,
-                                   "budget_pages": st.budget_pages, "budget_steps": st.budget_steps})
+                                   "budget_pages": st.budget_pages, "budget_steps": st.budget_steps,
+                                   "main_model": self._main_model, "aux_model": self._aux_model})
 
         messages: list = [
             {"role": "system", "content": system_prompt(st.goal, st.budget_pages, st.budget_steps, memory_hints)},
@@ -118,6 +125,7 @@ class AutonomousCrawlAgent:
                                     "saved_tokens": saved,
                                     "est_tokens": estimate_messages_tokens(messages),
                                     "count": self.ctx.compactions,
+                                    "model": self._aux_model,
                                 })
 
                         try:
@@ -140,7 +148,7 @@ class AutonomousCrawlAgent:
 
                         messages.append(msg)
                         if msg.get("content"):
-                            yield AgentEvent("thought", {"text": msg["content"]})
+                            yield AgentEvent("thought", {"text": msg["content"], "model": self._main_model})
 
                         tool_calls = msg.get("tool_calls") or []
                         if not tool_calls:
@@ -192,7 +200,7 @@ class AutonomousCrawlAgent:
                             ])
                             for call in parsed_calls:
                                 if call is not finish_call:
-                                    yield AgentEvent("action", {"tool": call["name"], "args": {}})
+                                    yield AgentEvent("action", {"tool": call["name"], "args": {}, "model": self._main_model})
                         elif st.cancelled:
                             # 取消后不再抓取，但同样要回填 tool 消息
                             for call in parsed_calls:
@@ -208,7 +216,7 @@ class AutonomousCrawlAgent:
                         else:
                             # ── 并行执行一批工具调用（保持事件与结果按调用顺序产出） ──
                             for call in parsed_calls:
-                                yield AgentEvent("action", {"tool": call["name"], "args": call["args"]})
+                                yield AgentEvent("action", {"tool": call["name"], "args": call["args"], "model": self._main_model})
                             results = await executor.dispatch_many(
                                 [(c["name"], c["args"]) for c in parsed_calls]
                             )
@@ -235,10 +243,12 @@ class AutonomousCrawlAgent:
                                     yield AgentEvent("finding", {
                                         "title": f.get("title", ""), "url": f.get("url", ""),
                                         "data": f.get("data"), "content": f.get("content", ""),
+                                        "model": self._main_model,
                                     })
                                 yield AgentEvent("observation", {
                                     "tool": call["name"],
                                     "result": _compact(result) if isinstance(result, dict) else {"raw": str(result)[:300]},
+                                    "model": self._main_model,
                                 })
                             self.ctx.record_batch(batch_digests)
 
@@ -308,6 +318,7 @@ class AutonomousCrawlAgent:
             "findings": st.findings, "finding_count": len(st.findings),
             "pages_used": st.pages_used, "steps_used": st.steps_used,
             "usage": self.llm.usage,
+            "model": self._main_model,
         })
 
     async def _generate_report(self, reason: str, agent_summary: str = "") -> str:

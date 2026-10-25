@@ -309,12 +309,24 @@ class RAGEngine:
             else [{"role": "user", "content": question}]
         )
 
+        # 模型链路标注：改写（若有）= 辅助模型，回答 = 主模型
+        rewrite_used = bool(retrieval.get("debug", {}).get("rewrite"))
+        try:
+            answer_model = (Config.get_llm_config() or {}).get("model", "")
+        except Exception:
+            answer_model = ""
+        models_info = {
+            "answer": answer_model,
+            "rewrite": (Config.AUX_LLM_MODEL or "") if rewrite_used and (Config.AUX_LLM_PROVIDER or "").strip() else None,
+        }
+
         if mode == "rag":
             yield {
                 "type": "sources",
                 "sources": _collect_sources(results),
                 "relevance": retrieval["relevance"],
                 "debug": retrieval.get("debug", {}),
+                "models": models_info,
             }
 
         llm_client = self._get_llm_client()

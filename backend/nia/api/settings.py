@@ -47,6 +47,10 @@ async def get_config():
             "OPENAI_LLM_MODEL": Config.OPENAI_LLM_MODEL,
             "QWEN_LLM_MODEL": Config.QWEN_LLM_MODEL,
             "OLLAMA_LLM_MODEL": Config.OLLAMA_LLM_MODEL,
+            # v3：辅助模型（角色：上下文摘要/查询改写），非敏感项
+            "AUX_LLM_PROVIDER": Config.AUX_LLM_PROVIDER,
+            "AUX_LLM_MODEL": Config.AUX_LLM_MODEL,
+            "AUX_LLM_ENABLED": bool((Config.AUX_LLM_PROVIDER or "").strip()),
             "EMBED_PROVIDER": Config.EMBED_PROVIDER,
             "EMBED_MODEL": Config.EMBED_MODEL,
             "EMBED_DIM": Config.EMBED_DIM,
@@ -61,6 +65,12 @@ async def get_config():
             "DOM_SIMILARITY_THRESHOLD": Config.DOM_SIMILARITY_THRESHOLD,
             "RAG_THRESHOLD": Config.RAG_THRESHOLD,
             "RAG_TOP_K": Config.RAG_TOP_K,
+            # v3：混合检索参数组
+            "RAG_HYBRID": Config.RAG_HYBRID,
+            "RAG_RRF_K": Config.RAG_RRF_K,
+            "RAG_CANDIDATE_K": Config.RAG_CANDIDATE_K,
+            "RAG_QUERY_REWRITE": Config.RAG_QUERY_REWRITE,
+            "RERANK_MODEL": Config.RERANK_MODEL or "",
             "CRAWL_MAX_PAGES": Config.CRAWL_MAX_PAGES,
             "CRAWL_CONCURRENCY": Config.CRAWL_CONCURRENCY,
             "MAX_CONCURRENT_CRAWLS": Config.MAX_CONCURRENT_CRAWLS,
@@ -137,16 +147,54 @@ def _probe_llm() -> dict:
     return status
 
 
+def _probe_aux_llm() -> dict:
+    """辅助模型健康探测（get_aux_client 内含 60s 缓存探测，不额外打请求）。"""
+    provider = (Config.AUX_LLM_PROVIDER or "").strip().lower()
+    status: dict = {
+        "connected": False,
+        "provider": provider or "(未配置)",
+        "model": Config.AUX_LLM_MODEL or "",
+        "enabled": bool(provider),
+        "role": "摘要 / 查询改写（后台任务）",
+    }
+    if not provider:
+        status["error"] = "未启用（AUX_LLM_PROVIDER 为空）"
+        return status
+    try:
+        # 独立事件循环在线程里跑 async 探测（Ollama 走 /api/tags，不触发模型加载）
+        import asyncio as _asyncio
+
+        from nia.ai.llm_client import get_aux_client
+
+        async def _probe():
+            return await get_aux_client()
+
+        loop = _asyncio.new_event_loop()
+        try:
+            client = loop.run_until_complete(_probe())
+        finally:
+            loop.close()
+        status["connected"] = client is not None
+        if client is None:
+            status["error"] = "不可达或模型缺失（自动回退主模型）"
+    except Exception as e:
+        logger.info(f"settings: aux llm probe failed: {e}")
+        status["error"] = str(e)[:200]
+    return status
+
+
 @router.get("/status")
 async def get_service_status():
     loop = asyncio.get_running_loop()
-    redis_status, mysql_status, llm_status = await asyncio.gather(
+    redis_status, mysql_status, llm_status, aux_status = await asyncio.gather(
         loop.run_in_executor(None, _probe_redis),
         loop.run_in_executor(None, _probe_mysql),
         loop.run_in_executor(None, _probe_llm),
+        loop.run_in_executor(None, _probe_aux_llm),
     )
     return {
         "redis": redis_status,
         "mysql": mysql_status,
         "llm_provider": llm_status,
+        "aux_llm": aux_status,
     }
