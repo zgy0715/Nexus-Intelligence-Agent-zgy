@@ -124,21 +124,55 @@ _MAX_COMPLETION_TOKENS_PREFIXES = ("o1", "o3", "o4", "gpt-5")
 class LLMClient:
     """通用 LLM 客户端，直接 HTTP 调用，OpenAI 兼容。"""
 
-    def __init__(self):
-        self._provider: LLMProvider = Config.LLM_PROVIDER
-        self._config = Config.get_llm_config()
-        base_url = (self._config["base_url"] or "").rstrip("/")
+    def __init__(
+        self,
+        provider: str | None = None,
+        model: str | None = None,
+        base_url: str | None = None,
+        api_key: str | None = None,
+        *,
+        timeout: float | None = None,
+        max_retries: int | None = None,
+    ):
+        # 显式覆盖（辅助模型等场景）优先于 Config 主配置
+        if provider is not None:
+            try:
+                self._provider = LLMProvider(provider.lower().strip())
+            except ValueError as e:
+                raise ValueError(f"未知 LLM provider: {provider}") from e
+            cfg = {
+                "api_key": api_key or "",
+                "base_url": (base_url or "").strip(),
+                "model": (model or "").strip(),
+            }
+        else:
+            self._provider = Config.LLM_PROVIDER
+            cfg = Config.get_llm_config()
+            if model:
+                cfg["model"] = model
+            if base_url:
+                cfg["base_url"] = base_url
+            if api_key:
+                cfg["api_key"] = api_key
+        self._config = cfg
+        base = (cfg["base_url"] or "").rstrip("/")
         # Ollama 的 OpenAI 兼容端点挂在 /v1 下；配置里通常只写 http://localhost:11434
-        if self._provider == LLMProvider.OLLAMA and not base_url.endswith("/v1"):
-            base_url = f"{base_url}/v1"
-        self._base_url = base_url
-        self._api_key = self._config["api_key"]
-        self._model = self._config["model"]
+        if self._provider == LLMProvider.OLLAMA and not base.endswith("/v1"):
+            base = f"{base}/v1"
+        self._base_url = base
+        self._api_key = cfg["api_key"]
+        self._model = cfg["model"]
+        self._timeout = timeout if timeout is not None else Config.LLM_TIMEOUT
+        self._max_retries = max_retries if max_retries is not None else Config.LLM_MAX_RETRIES
         self._client: httpx.Client | None = None
         self._client_lock = threading.Lock()
         self._aclient: httpx.AsyncClient | None = None
         self._usage = {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
         logger.info(f"LLM client: provider={self._provider.value}, model={self._model}")
+
+    @property
+    def model(self) -> str:
+        return self._model
 
     # ── 用量统计 ──────────────────────────────────────────────────
 
@@ -168,7 +202,7 @@ class LLMClient:
         if self._client is None or self._client.is_closed:
             with self._client_lock:
                 if self._client is None or self._client.is_closed:
-                    self._client = httpx.Client(timeout=httpx.Timeout(Config.LLM_TIMEOUT, connect=10.0))
+                    self._client = httpx.Client(timeout=httpx.Timeout(self._timeout, connect=10.0))
         return self._client
 
     def _token_param(self) -> str:
@@ -244,7 +278,7 @@ class LLMClient:
     def _get_aclient(self) -> httpx.AsyncClient:
         if self._aclient is None or self._aclient.is_closed:
             self._aclient = httpx.AsyncClient(
-                timeout=httpx.Timeout(Config.LLM_TIMEOUT, connect=10.0),
+                timeout=httpx.Timeout(self._timeout, connect=10.0),
                 limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
             )
         return self._aclient
@@ -277,7 +311,7 @@ class LLMClient:
         """带退避重试的 chat/completions 调用，返回完整 JSON 响应。"""
         url = f"{self._base_url}/chat/completions"
         client = self._get_aclient()
-        max_retries = max(0, Config.LLM_MAX_RETRIES)
+        max_retries = max(0, self._max_retries)
         last_exc: Exception | None = None
         for attempt in range(max_retries + 1):
             try:
@@ -446,3 +480,146 @@ def _normalize_messages(messages: list) -> list[dict]:
         else:
             formatted.append({"role": "user", "content": str(msg)})
     return formatted
+
+
+# ── 辅助模型（v3）：廉价后台任务路由到本地 Ollama，失败自动回退 ──────
+#
+# 用途：上下文压缩摘要、RAG 查询改写等「不在关键路径上的后台任务」。
+# 主模型（DeepSeek 云 API）只留给 Agent 推理/工具调用/报告 —— 这是模型路由
+# （model routing）的最小落地：强模型做难事，本地模型做杂事，零 token 成本。
+#
+# 任何失败（未启动/无模型/超时）都返回 None，调用方降级为确定性处理，功能不缺失。
+
+
+_aux_client: LLMClient | None = None
+_aux_healthy = False
+_aux_checked_at = 0.0
+
+
+async def get_aux_client() -> LLMClient | None:
+    """返回辅助模型客户端；禁用/不健康返回 None。健康结果缓存 AUX_LLM_HEALTH_INTERVAL 秒。"""
+    global _aux_client, _aux_healthy, _aux_checked_at
+
+    provider = (Config.AUX_LLM_PROVIDER or "").strip().lower()
+    if not provider:
+        return None
+
+    import time as _time
+
+    now = _time.monotonic()
+    if _aux_client is not None and (now - _aux_checked_at) < Config.AUX_LLM_HEALTH_INTERVAL:
+        return _aux_client if _aux_healthy else None
+
+    _aux_checked_at = now
+    if _aux_client is None:
+        try:
+            _aux_client = LLMClient(
+                provider=provider,
+                model=Config.AUX_LLM_MODEL,
+                base_url=Config.AUX_LLM_BASE_URL,
+                timeout=Config.AUX_LLM_TIMEOUT,
+                max_retries=Config.AUX_LLM_MAX_RETRIES,
+            )
+        except Exception as e:
+            logger.debug(f"aux client init failed: {e}")
+            _aux_healthy = False
+            return None
+
+    _aux_healthy = await _probe_aux(_aux_client)
+    return _aux_client if _aux_healthy else None
+
+
+async def _probe_aux(client: LLMClient) -> bool:
+    """探测辅助模型可达性。Ollama 用 /api/tags（不触发模型加载），其余用 /models。"""
+    import httpx as _httpx
+
+    base = Config.AUX_LLM_BASE_URL.rstrip("/") if provider_is_ollama() else client._base_url
+    if provider_is_ollama():
+        probe_url, auth = f"{base}/api/tags", False
+    else:
+        probe_url, auth = f"{base}/models", True
+    try:
+        async with _httpx.AsyncClient(timeout=3.0) as probe_client:
+            headers = {"Authorization": f"Bearer {client._api_key or 'ollama'}"} if auth else {}
+            resp = await probe_client.get(probe_url, headers=headers)
+            if resp.status_code != 200:
+                logger.debug(f"aux probe {probe_url} -> HTTP {resp.status_code}")
+                return False
+            if provider_is_ollama():
+                models = [m.get("name", "") for m in (resp.json().get("models") or [])]
+                wanted = (Config.AUX_LLM_MODEL or "").lower()
+                ok = any(m.lower().startswith(wanted) or wanted in m.lower() for m in models)
+                if not ok:
+                    logger.warning(f"Ollama 中未找到辅助模型 {Config.AUX_LLM_MODEL}（已有: {models}）")
+                return ok
+            return True
+    except Exception as e:
+        logger.debug(f"aux probe failed: {e}")
+        return False
+
+
+def provider_is_ollama() -> bool:
+    return (Config.AUX_LLM_PROVIDER or "").strip().lower() == "ollama"
+
+
+async def aux_achat(
+    prompt: str,
+    *,
+    system: str | None = None,
+    max_tokens: int = 400,
+    temperature: float = 0.2,
+) -> str | None:
+    """辅助模型单轮调用。返回文本；任何失败返回 None（调用方自行降级）。"""
+    client = await get_aux_client()
+    if client is None:
+        return None
+    sys_text = system or "你是一个简洁的文本处理助手，只输出被要求的内容。"
+    # Ollama 走原生 /api/chat：qwen3 的思考模式只能用 think:false 关闭
+    # （OpenAI 兼容端点不透传该参数，会把输出塞进 reasoning 字段、content 为空）
+    if provider_is_ollama():
+        return await _aux_ollama_chat(client, sys_text, prompt, max_tokens, temperature)
+    # qwen3 通过 OpenAI 兼容端点时用 /no_think 软开关兜底
+    if "qwen3" in (client.model or "").lower():
+        sys_text = "/no_think\n" + sys_text
+    try:
+        return await client.achat(
+            [{"role": "system", "content": sys_text}, {"role": "user", "content": prompt}],
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
+    except Exception as e:
+        global _aux_healthy
+        _aux_healthy = False
+        logger.debug(f"aux chat failed: {e}")
+        return None
+
+
+async def _aux_ollama_chat(
+    client: "LLMClient", sys_text: str, prompt: str, max_tokens: int, temperature: float
+) -> str | None:
+    """Ollama 原生 /api/chat（think:false 关闭 qwen3 思考模式）。"""
+    import httpx as _httpx
+
+    base = (Config.AUX_LLM_BASE_URL or "").rstrip("/")
+    try:
+        async with _httpx.AsyncClient(timeout=Config.AUX_LLM_TIMEOUT) as http:
+            resp = await http.post(
+                f"{base}/api/chat",
+                json={
+                    "model": Config.AUX_LLM_MODEL,
+                    "messages": [
+                        {"role": "system", "content": sys_text},
+                        {"role": "user", "content": prompt},
+                    ],
+                    "stream": False,
+                    "think": False,
+                    "options": {"temperature": temperature, "num_predict": max_tokens},
+                },
+            )
+            resp.raise_for_status()
+            return resp.json().get("message", {}).get("content") or ""
+    except Exception as e:
+        global _aux_healthy
+        _aux_healthy = False
+        logger.debug(f"aux ollama chat failed: {e}")
+        return None

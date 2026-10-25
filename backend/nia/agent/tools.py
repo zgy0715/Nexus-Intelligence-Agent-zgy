@@ -1,9 +1,25 @@
-"""Agent 工具集 — OpenAI tools schema + 异步实现 + 预算拦截。"""
+"""Agent 工具集 — 注册表模式：Pydantic 参数模型自动生成 OpenAI schema + 并行派发。
+
+v3 变更（对比旧版）：
+- 旧版 TOOLS schema 与工具实现分开手写，改参数名/加字段时两处漂移只能靠人肉同步；
+  现在用 `@tool_spec` 装饰器把 Pydantic 参数模型绑定到实现方法上，
+  OpenAI tools schema 由 `model_json_schema()` 自动生成 —— 单一事实来源。
+- 新增 `dispatch_many`：同一响应里的多个工具调用并发执行
+  （预算语义与旧版 crawl_links 的并发 gather 一致：检查→登记存在竞态窗口，
+  过冲上界 = 单批大小，与旧实现同级）。
+- 保留全部防御性参数清洗（_as_text/_as_url_list）：Pydantic 校验失败时
+  退回原始 dict，由 handler 内的清洗函数兜底 —— LLM 的畸形输入永远不可信。
+"""
 
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
+from dataclasses import dataclass
+from typing import Any, Awaitable, Callable
+
+from pydantic import BaseModel, Field, ValidationError
 
 from nia.ai.llm_client import LLMClient
 from nia.crawler.extractor import StructuredExtractor
@@ -16,90 +32,82 @@ from nia.utils.url_safety import normalize_url
 
 logger = logging.getLogger(__name__)
 
-# 给 LLM 的工具定义（finish 也声明，便于模型在该调用时调用）
-TOOLS: list[dict] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "fetch_page",
-            "description": "抓取并快速理解一个网页，返回标题、内容摘要与候选链接。用于探索。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string", "description": "要抓取的网页 URL"}
-                },
-                "required": ["url"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "crawl_links",
-            "description": "并发抓取并摘要一组网页（最多 8 个），用于批量探索相关链接。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "urls": {
-                        "type": "array",
-                        "items": {"type": "string"},
-                        "description": "要批量抓取的 URL 列表（最多 8 个）",
-                    }
-                },
-                "required": ["urls"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "extract_data",
-            "description": "从某个网页按指令提取结构化数据，并自动记录为一条发现。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "url": {"type": "string"},
-                    "instruction": {"type": "string", "description": "提取什么（如：标题、日期、作者、要点）"},
-                },
-                "required": ["url", "instruction"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "record_finding",
-            "description": "把你综合得到的有价值信息记录为一条发现。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "title": {"type": "string"},
-                    "content": {"type": "string"},
-                    "url": {"type": "string", "description": "来源 URL（可选）"},
-                },
-                "required": ["title", "content"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "finish",
-            "description": "目标已充分达成或无更多可探索内容时调用，结束任务。",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "summary": {"type": "string", "description": "对成果的简短总结"}
-                },
-                "required": ["summary"],
-            },
-        },
-    },
-]
-
 _MAX_BATCH = 8
 _MAX_CANDIDATE_LINKS = 20
 _MAX_INSTRUCTION = 1000
+
+
+# ── 参数模型（schema 单一事实来源；字段保持扁平，避免 $defs/$ref 兼容性问题） ──
+
+
+class FetchPageArgs(BaseModel):
+    url: str = Field(description="要抓取的网页 URL")
+
+
+class CrawlLinksArgs(BaseModel):
+    urls: list[str] = Field(description="要批量抓取的 URL 列表（最多 8 个）")
+
+
+class ExtractDataArgs(BaseModel):
+    url: str = Field(description="目标网页 URL")
+    instruction: str = Field(description="提取什么（如：标题、日期、作者、要点）")
+
+
+class RecordFindingArgs(BaseModel):
+    title: str = Field(description="发现标题")
+    content: str = Field(description="发现内容")
+    url: str = Field(default="", description="来源 URL（可选）")
+
+
+class FinishArgs(BaseModel):
+    summary: str = Field(description="对成果的简短总结")
+
+
+@dataclass(frozen=True)
+class ToolSpec:
+    name: str
+    description: str
+    args_model: type[BaseModel]
+    handler: Callable[..., Awaitable[dict]] | None  # None = 由 Agent 主循环特殊处理（finish）
+
+    def openai_schema(self) -> dict:
+        return {
+            "type": "function",
+            "function": {
+                "name": self.name,
+                "description": self.description,
+                "parameters": _flat_json_schema(self.args_model),
+            },
+        }
+
+
+def _flat_json_schema(model: type[BaseModel]) -> dict:
+    """生成无 $defs/$ref 的扁平 JSON schema（DeepSeek 等兼容端点对嵌套 $ref 支持不稳）。"""
+    schema = model.model_json_schema()
+    props = {k: _strip_title(v) for k, v in schema.get("properties", {}).items()}
+    out: dict[str, Any] = {"type": "object", "properties": props}
+    required = schema.get("required", [])
+    if required:
+        out["required"] = required
+    return out
+
+
+def _strip_title(node):
+    if isinstance(node, dict):
+        return {k: _strip_title(v) for k, v in node.items() if k != "title"}
+    if isinstance(node, list):
+        return [_strip_title(v) for v in node]
+    return node
+
+
+def tool_spec(name: str, description: str, args_model: type[BaseModel]):
+    """把 ToolExecutor 方法注册为工具。"""
+
+    def deco(fn):
+        fn.__tool_spec__ = ToolSpec(name=name, description=description, args_model=args_model, handler=None)
+        return fn
+
+    return deco
 
 
 # ── 参数清洗：LLM 经常给出与 schema 不符的类型 ──────────────────
@@ -116,8 +124,6 @@ def _as_text(value, limit: int = 4000) -> str:
     elif isinstance(value, (list, tuple)):
         text = " ".join(_as_text(v, limit) for v in value)
     elif isinstance(value, dict):
-        import json
-
         try:
             text = json.dumps(value, ensure_ascii=False)
         except (TypeError, ValueError):
@@ -225,8 +231,9 @@ class ToolExecutor:
 
     # ── 工具实现 ──────────────────────────────────────────────────
 
+    @tool_spec("fetch_page", "抓取并快速理解一个网页，返回标题、内容摘要与候选链接。用于探索。", FetchPageArgs)
     async def fetch_page(self, url: str) -> dict:
-        page = await self._get_page(url)
+        page = await self._get_page(_as_text(url, 2000))
         if page is None:
             return {"ok": False, "error": "抓取失败或 URL 无效", "url": url}
         summary = await self._summarize(page)
@@ -240,6 +247,7 @@ class ToolExecutor:
             "chars": len(page.text),
         }
 
+    @tool_spec("crawl_links", "并发抓取并摘要一组网页（最多 8 个），用于批量探索相关链接。", CrawlLinksArgs)
     async def crawl_links(self, urls: list[str]) -> dict:
         urls = _as_url_list(urls)[:_MAX_BATCH]
         # 过滤已访问
@@ -273,6 +281,29 @@ class ToolExecutor:
             out["skipped_for_budget"] = skipped
         return out
 
+    @tool_spec("extract_data", "从某个网页按指令提取结构化数据，并自动记录为一条发现。", ExtractDataArgs)
+    async def extract_data(self, url: str, instruction: str) -> dict:
+        page = await self._get_page(_as_text(url, 2000))
+        if page is None:
+            return {"ok": False, "error": "抓取失败或 URL 无效", "url": url}
+        finding = await self.extractor.extract(page, _as_text(instruction, _MAX_INSTRUCTION))
+        is_new = self.state.add_finding({
+            "url": finding.url,
+            "title": finding.title,
+            "data": finding.data,
+            "content": getattr(finding, "summary", "") or "",
+        })
+        return {"ok": True, "url": finding.url, "title": finding.title, "data": finding.data, "is_new": is_new}
+
+    @tool_spec("record_finding", "把你综合得到的有价值信息记录为一条发现。", RecordFindingArgs)
+    async def record_finding(self, title: str, content: str, url: str = "") -> dict:
+        title = _as_text(title, 300)
+        content = _as_text(content, 8000)
+        if not title and not content:
+            return {"ok": False, "error": "title 与 content 不能同时为空"}
+        is_new = self.state.add_finding({"url": _as_text(url, 2000), "title": title, "content": content})
+        return {"ok": True, "recorded": True, "is_new": is_new}
+
     async def _fetch_and_summarize(self, url: str) -> dict:
         page = await self._get_page(url)
         if page is None:
@@ -287,64 +318,49 @@ class ToolExecutor:
             "candidate_links": page.links[:10],
         }
 
-    async def extract_data(self, url: str, instruction: str) -> dict:
-        page = await self._get_page(url)
-        if page is None:
-            return {"ok": False, "error": "抓取失败或 URL 无效", "url": url}
-        finding = await self.extractor.extract(page, instruction)
-        is_new = self.state.add_finding({
-            "url": finding.url,
-            "title": finding.title,
-            "data": finding.data,
-            "content": getattr(finding, "summary", "") or "",
-        })
-        return {"ok": True, "url": finding.url, "title": finding.title, "data": finding.data, "is_new": is_new}
-
-    async def record_finding(self, title: str, content: str, url: str = "") -> dict:
-        if not title and not content:
-            return {"ok": False, "error": "title 与 content 不能同时为空"}
-        is_new = self.state.add_finding({"url": url, "title": title, "content": content})
-        return {"ok": True, "recorded": True, "is_new": is_new}
-
     # ── 派发 ──────────────────────────────────────────────────────
 
     async def dispatch(self, name: str, args: dict) -> dict:
-        """执行工具调用。所有工具都带超时；抓取类工具先做预算检查。"""
+        """执行单个工具调用。所有工具都带超时；抓取类工具先做预算检查。"""
         args = args if isinstance(args, dict) else {}
-        fetch_tools = {"fetch_page", "crawl_links", "extract_data"}
-        if name in fetch_tools and not self.state.budget_left():
+        spec = TOOL_REGISTRY.get(name)
+        if spec is None:
+            return {"ok": False, "error": f"未知工具: {name}"}
+        if name != "finish" and name in {"fetch_page", "crawl_links", "extract_data"} and not self.state.budget_left():
             return {"ok": False, "budget_exhausted": True,
                     "message": "页面/步数预算已用尽，请立即调用 finish 汇总。"}
         if self._cancelled():
             return {"ok": False, "cancelled": True, "message": "任务已被取消。"}
+
+        clean_args = _validate_args(spec, args)
         try:
-            coro = self._call(name, args)
+            coro = spec.handler(self, **clean_args) if spec.handler else self._unknown(name)
             return await asyncio.wait_for(coro, timeout=max(10.0, Config.AGENT_TOOL_TIMEOUT))
         except asyncio.TimeoutError:
             logger.warning(f"tool {name} timed out")
             return {"ok": False, "error": f"工具 {name} 执行超时（>{Config.AGENT_TOOL_TIMEOUT:.0f}s）"}
         except asyncio.CancelledError:
             raise
+        except TypeError as e:
+            # Pydantic 清洗后仍参数不匹配 → 用原始参数兜底（handler 内部再做防御性清洗）
+            logger.debug(f"tool {name} strict call failed ({e}); fallback to raw args")
+            try:
+                return await asyncio.wait_for(spec.handler(self, **args), timeout=max(10.0, Config.AGENT_TOOL_TIMEOUT))
+            except Exception as e2:
+                logger.warning(f"tool {name} error: {e2}")
+                return {"ok": False, "error": str(e2)[:300]}
         except Exception as e:
             logger.warning(f"tool {name} error: {e}")
             return {"ok": False, "error": str(e)[:300]}
 
-    async def _call(self, name: str, args: dict) -> dict:
-        if name == "fetch_page":
-            return await self.fetch_page(_as_text(args.get("url"), 2000))
-        if name == "crawl_links":
-            return await self.crawl_links(args.get("urls"))
-        if name == "extract_data":
-            return await self.extract_data(
-                _as_text(args.get("url"), 2000),
-                _as_text(args.get("instruction"), _MAX_INSTRUCTION),
-            )
-        if name == "record_finding":
-            return await self.record_finding(
-                _as_text(args.get("title"), 300),
-                _as_text(args.get("content"), 8000),
-                _as_text(args.get("url"), 2000),
-            )
+    async def dispatch_many(self, calls: list[tuple[str, dict]]) -> list[dict]:
+        """并发执行一批工具调用，结果按输入顺序返回。
+
+        单个工具失败/超时不影响同批其它调用（dispatch 内部已捕获异常）。
+        """
+        return list(await asyncio.gather(*(self.dispatch(name, args) for name, args in calls)))
+
+    async def _unknown(self, name: str) -> dict:
         return {"ok": False, "error": f"未知工具: {name}"}
 
     async def aclose(self) -> None:
@@ -355,3 +371,34 @@ class ToolExecutor:
                 await closer()
             except Exception as e:
                 logger.debug(f"extractor close failed: {e}")
+
+
+def _validate_args(spec: ToolSpec, args: dict) -> dict:
+    """Pydantic 校验工具参数；失败返回原始 dict（handler 内防御性清洗兜底）。"""
+    try:
+        return spec.args_model.model_validate(args).model_dump()
+    except (ValidationError, Exception):
+        return args
+
+
+# 收集类方法上的 tool_spec 元数据 + finish（由主循环特殊处理，无 executor 方法）
+TOOL_REGISTRY: dict[str, ToolSpec] = {}
+for _attr in vars(ToolExecutor).values():
+    _spec: ToolSpec | None = getattr(_attr, "__tool_spec__", None)
+    if _spec is not None:
+        TOOL_REGISTRY[_spec.name] = ToolSpec(
+            name=_spec.name,
+            description=_spec.description,
+            args_model=_spec.args_model,
+            handler=_attr,
+        )
+TOOL_REGISTRY["finish"] = ToolSpec(
+    name="finish",
+    description="目标已充分达成或无更多可探索内容时调用，结束任务。",
+    args_model=FinishArgs,
+    handler=None,
+)
+
+# 兼容旧引用：给 LLM 的 tools schema 列表（顺序即定义顺序）
+TOOLS: list[dict] = [TOOL_REGISTRY[n].openai_schema() for n in
+                     ("fetch_page", "crawl_links", "extract_data", "record_finding", "finish")]

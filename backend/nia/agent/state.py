@@ -33,6 +33,9 @@ class AgentState:
     error: str = ""
     created_at: str = field(default_factory=lambda: utcnow().isoformat())
 
+    # 累计 token 用量（v3：随 finish 落库，agent_runs 的 extra JSON 兜底列承接）
+    usage: dict = field(default_factory=lambda: {"calls": 0, "prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0})
+
     cancel_flag: asyncio.Event = field(default_factory=asyncio.Event)
 
     def budget_left(self) -> bool:
@@ -95,5 +98,6 @@ class AgentState:
             "finding_count": len(self.findings),
             "report": self.report,
             "error": self.error,
+            "usage": self.usage,
             "created_at": self.created_at,
         }

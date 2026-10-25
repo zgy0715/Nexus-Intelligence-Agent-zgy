@@ -1,4 +1,15 @@
-"""自主爬取 Agent — 原生 tool-calling 循环（async generator，逐步 yield 事件）。"""
+"""自主爬取 Agent — 原生 tool-calling 循环（async generator，逐步 yield 事件）。
+
+v3 变更：
+- **上下文工程**：工具结果经 `truncate_tool_result` 结构化截断；历史超过
+  token 预算时由 ContextManager 滚动压缩（emit `compaction` 事件），
+  摘要块过大时用辅助模型（本地 Ollama）二次合并。
+- **并行工具执行**：同一响应里的多个工具调用并发派发（`dispatch_many`），
+  finish/取消仍走串行特殊路径。
+- **模型路由**：主模型（DeepSeek）只做推理/报告；后台杂事路由到辅助模型。
+- **领域记忆**：启动时注入同站点历史经验，收尾时写回（Redis）。
+- **usage 透出**：progress 事件携带累计 token 与估算上下文占用。
+"""
 
 from __future__ import annotations
 
@@ -11,10 +22,18 @@ from nia.ai.llm_client import LLMClient, loads_json_loose
 from nia.crawler.extractor import StructuredExtractor
 from nia.crawler.fetcher import AsyncFetcher
 from nia.crawler.models import CrawlConfig
+from nia.agent.context import (
+    ContextManager,
+    estimate_messages_tokens,
+    summarize_args,
+    summarize_result,
+    truncate_tool_result,
+)
 from nia.agent.events import AgentEvent
+from nia.agent.memory import AgentMemory, domains_of
 from nia.agent.prompts import summary_prompt, system_prompt
 from nia.agent.state import AgentState
-from nia.agent.tools import TOOLS, ToolExecutor
+from nia.agent.tools import TOOL_REGISTRY, ToolExecutor
 from nia.utils.config import Config
 
 logger = logging.getLogger(__name__)
@@ -29,12 +48,18 @@ _REASON_TEXT = {
 
 _TOOL_RESULT_LIMIT = 6000
 
+# 给 LLM 的 tools schema（由 Pydantic 参数模型自动生成，见 tools.py）
+AGENT_TOOLS = [TOOL_REGISTRY[n].openai_schema() for n in
+               ("fetch_page", "crawl_links", "extract_data", "record_finding", "finish")]
+
 
 class AutonomousCrawlAgent:
     def __init__(self, state: AgentState, config: CrawlConfig | None = None):
         self.state = state
         self.config = config or CrawlConfig()
         self.llm = LLMClient()
+        self.ctx = ContextManager()
+        self.memory = AgentMemory()
 
     async def run(self) -> AsyncGenerator[AgentEvent, None]:
         st = self.state
@@ -50,11 +75,18 @@ class AutonomousCrawlAgent:
 
     async def _run_inner(self) -> AsyncGenerator[AgentEvent, None]:
         st = self.state
+
+        # 领域记忆：注入同站点历史经验（Redis 不可用时为空串，无副作用）
+        seed_domains = domains_of(st.seeds)
+        memory_hints = await self.memory.load_hints(seed_domains)
+        if memory_hints:
+            logger.info(f"agent memory hints injected for {seed_domains}")
+
         yield AgentEvent("start", {"goal": st.goal, "seeds": st.seeds,
                                    "budget_pages": st.budget_pages, "budget_steps": st.budget_steps})
 
         messages: list = [
-            {"role": "system", "content": system_prompt(st.goal, st.budget_pages, st.budget_steps)},
+            {"role": "system", "content": system_prompt(st.goal, st.budget_pages, st.budget_steps, memory_hints)},
             {"role": "user", "content": (
                 f"目标：{st.goal}\n\n种子 URL：\n" + "\n".join(f"- {u}" for u in st.seeds)
                 + "\n\n请从种子页面开始探索。"
@@ -77,9 +109,20 @@ class AutonomousCrawlAgent:
                         findings_before = len(st.findings)
                         pages_before = st.pages_used
 
+                        # ── 上下文滚动压缩：估算 token 超预算时压缩最旧步骤 ──
+                        if self.ctx.should_compact(messages):
+                            messages, saved = self.ctx.compact(messages)
+                            if saved > 0:
+                                logger.info(f"context compacted: ~{saved} tokens freed (total {self.ctx.compactions}x)")
+                                yield AgentEvent("compaction", {
+                                    "saved_tokens": saved,
+                                    "est_tokens": estimate_messages_tokens(messages),
+                                    "count": self.ctx.compactions,
+                                })
+
                         try:
                             msg = await asyncio.wait_for(
-                                self.llm.achat_tools(messages, tools=TOOLS, tool_choice="auto"),
+                                self.llm.achat_tools(messages, tools=AGENT_TOOLS, tool_choice="auto"),
                                 timeout=llm_timeout,
                             )
                         except asyncio.TimeoutError:
@@ -111,66 +154,100 @@ class AutonomousCrawlAgent:
                             continue
                         no_tool_streak = 0
 
-                        finished = False
-                        aborted = False
-                        for idx, tc in enumerate(tool_calls):
+                        # 解析全部 tool_calls（畸形参数归一化）
+                        parsed_calls: list[dict] = []
+                        for tc in tool_calls:
                             fn = tc.get("function") or {}
-                            name = fn.get("name") or ""
                             raw_args = fn.get("arguments", "") or "{}"
-                            args = loads_json_loose(raw_args) or {}
+                            args = loads_json_loose(raw_args) if isinstance(raw_args, str) else raw_args
                             if not isinstance(args, dict):
                                 args = {}
-                            yield AgentEvent("action", {"tool": name, "args": args})
-
-                            if name == "finish":
-                                st.status = "finished"
-                                agent_summary = str(args.get("summary") or "").strip()[:2000]
-                                finished = True
-                                # 必须为本次响应的**所有** tool_calls 回填 role:tool，
-                                # 否则下一轮请求会被 API 判为消息序列非法。
-                                for rest in tool_calls[idx:]:
-                                    rest_fn = rest.get("function") or {}
-                                    if rest_fn.get("name") == "finish" and agent_summary:
-                                        reply = agent_summary
-                                    else:
-                                        reply = "任务已结束。"
-                                    messages.append({
-                                        "role": "tool",
-                                        "tool_call_id": rest.get("id", ""),
-                                        "content": reply,
-                                    })
-                                break
-
-                            if st.cancelled:
-                                # 取消后不再抓取，但同样要回填 tool 消息
-                                for rest in tool_calls[idx:]:
-                                    messages.append({
-                                        "role": "tool",
-                                        "tool_call_id": rest.get("id", ""),
-                                        "content": "任务已被取消。",
-                                    })
-                                aborted = True
-                                break
-
-                            result = await executor.dispatch(name, args)
-                            messages.append({
-                                "role": "tool",
-                                "tool_call_id": tc.get("id", ""),
-                                "content": _truncate_json(result),
+                            parsed_calls.append({
+                                "id": tc.get("id", ""),
+                                "name": fn.get("name") or "",
+                                "args": args,
                             })
-                            # 把新发现透出给前端
-                            if name in ("extract_data", "record_finding") and result.get("is_new"):
-                                f = st.findings[-1] if st.findings else {}
-                                yield AgentEvent("finding", {
-                                    "title": f.get("title", ""), "url": f.get("url", ""),
-                                    "data": f.get("data"), "content": f.get("content", ""),
+
+                        finished = False
+                        aborted = False
+
+                        # ── finish：串行特殊路径（保持消息序列合法性） ──
+                        finish_call = next((c for c in parsed_calls if c["name"] == "finish"), None)
+                        if finish_call is not None:
+                            st.status = "finished"
+                            agent_summary = str(finish_call["args"].get("summary") or "").strip()[:2000]
+                            finished = True
+                            # 必须为本次响应的**所有** tool_calls 回填 role:tool，
+                            # 否则下一轮请求会被 API 判为消息序列非法。
+                            for call in parsed_calls:
+                                reply = agent_summary if (call["name"] == "finish" and agent_summary) else "任务已结束。"
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": call["id"],
+                                    "content": reply,
                                 })
-                            yield AgentEvent("observation", {"tool": name, "result": _compact(result)})
+                            self.ctx.record_batch([
+                                f"{c['name']}({summarize_args(c['args'])}) → {'结束: ' + agent_summary[:120] if c['name'] == 'finish' else '任务已结束'}"
+                                for c in parsed_calls
+                            ])
+                            for call in parsed_calls:
+                                if call is not finish_call:
+                                    yield AgentEvent("action", {"tool": call["name"], "args": {}})
+                        elif st.cancelled:
+                            # 取消后不再抓取，但同样要回填 tool 消息
+                            for call in parsed_calls:
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": call["id"],
+                                    "content": "任务已被取消。",
+                                })
+                            self.ctx.record_batch([
+                                f"{c['name']}({summarize_args(c['args'])}) → 已取消" for c in parsed_calls
+                            ])
+                            aborted = True
+                        else:
+                            # ── 并行执行一批工具调用（保持事件与结果按调用顺序产出） ──
+                            for call in parsed_calls:
+                                yield AgentEvent("action", {"tool": call["name"], "args": call["args"]})
+                            results = await executor.dispatch_many(
+                                [(c["name"], c["args"]) for c in parsed_calls]
+                            )
+                            batch_digests: list[str] = []
+                            for call, result in zip(parsed_calls, results):
+                                truncated = truncate_tool_result(result, limit=_TOOL_RESULT_LIMIT)
+                                try:
+                                    content = json.dumps(truncated, ensure_ascii=False)
+                                    if len(content) > _TOOL_RESULT_LIMIT:  # 键极多的退化情况兜底
+                                        content = content[:_TOOL_RESULT_LIMIT] + "…(截断)"
+                                except (TypeError, ValueError):
+                                    content = str(result)[:_TOOL_RESULT_LIMIT]
+                                messages.append({
+                                    "role": "tool",
+                                    "tool_call_id": call["id"],
+                                    "content": content,
+                                })
+                                batch_digests.append(
+                                    f"{call['name']}({summarize_args(call['args'])}) → {summarize_result(result)}"
+                                )
+                                # 把新发现透出给前端
+                                if isinstance(result, dict) and call["name"] in ("extract_data", "record_finding") and result.get("is_new"):
+                                    f = st.findings[-1] if st.findings else {}
+                                    yield AgentEvent("finding", {
+                                        "title": f.get("title", ""), "url": f.get("url", ""),
+                                        "data": f.get("data"), "content": f.get("content", ""),
+                                    })
+                                yield AgentEvent("observation", {
+                                    "tool": call["name"],
+                                    "result": _compact(result) if isinstance(result, dict) else {"raw": str(result)[:300]},
+                                })
+                            self.ctx.record_batch(batch_digests)
 
                         yield AgentEvent("progress", {
                             "pages_used": st.pages_used, "budget_pages": st.budget_pages,
                             "steps_used": st.steps_used, "budget_steps": st.budget_steps,
                             "findings": len(st.findings), "visited": len(st.visited),
+                            "usage": self.llm.usage,
+                            "est_context_tokens": estimate_messages_tokens(messages),
                         })
 
                         if finished or aborted:
@@ -207,10 +284,25 @@ class AutonomousCrawlAgent:
             "pages_used": st.pages_used, "budget_pages": st.budget_pages,
             "steps_used": st.steps_used, "budget_steps": st.budget_steps,
             "findings": len(st.findings), "visited": len(st.visited),
+            "usage": self.llm.usage,
+            "est_context_tokens": estimate_messages_tokens(messages),
         })
 
         report = await self._generate_report(reason, agent_summary)
         st.report = report
+        st.usage = self.llm.usage  # 随 run 落库（agent_runs.extra）
+
+        # 写领域记忆（尽力而为，绝不阻塞收尾）
+        note = ""
+        if st.findings:
+            top = [f.get("url") for f in st.findings[:3] if f.get("url")]
+            if top:
+                note = f"有效入口: {'; '.join(top)}"
+        await self.memory.record_outcome(
+            seed_domains + domains_of([f.get("url", "") for f in st.findings[:10]]),
+            st.status, len(st.findings), note,
+        )
+
         yield AgentEvent("finish", {
             "status": st.status, "reason": reason, "report": report,
             "findings": st.findings, "finding_count": len(st.findings),
@@ -235,11 +327,6 @@ class AutonomousCrawlAgent:
             for i, f in enumerate(self.state.findings, 1):
                 lines.append(f"{i}. {f.get('title','')} — {f.get('url','')}")
             return "\n".join(lines)
-
-
-def _truncate_json(obj: dict, limit: int = _TOOL_RESULT_LIMIT) -> str:
-    s = json.dumps(obj, ensure_ascii=False)
-    return s if len(s) <= limit else s[:limit] + "...(truncated)"
 
 
 def _compact(result: dict) -> dict:

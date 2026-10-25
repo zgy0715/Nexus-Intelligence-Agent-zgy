@@ -128,6 +128,20 @@ class Config:
     CRAWL_RESPECT_ROBOTS = os.getenv("CRAWL_RESPECT_ROBOTS", "true").lower() in ("1", "true", "yes", "on")
     # 单个进程内同时执行的爬取任务上限（防止无上限排队）
     MAX_CONCURRENT_CRAWLS = int(os.getenv("MAX_CONCURRENT_CRAWLS", "4"))
+    # v3：HTML 磁盘缓存 TTL（秒）；0 = 禁用
+    CRAWL_HTML_CACHE_TTL = int(os.getenv("CRAWL_HTML_CACHE_TTL", str(24 * 3600)))
+
+    # ── RAG（v3 混合检索）────────────────────────────────────────
+    # 混合检索总开关（BM25 + 向量 RRF 融合）
+    RAG_HYBRID = os.getenv("RAG_HYBRID", "true").lower() in ("1", "true", "yes", "on")
+    # RRF 融合常数（标准取值 60）
+    RAG_RRF_K = int(os.getenv("RAG_RRF_K", "60"))
+    # 每路召回候选数（融合前；最终仍取 RAG_TOP_K）
+    RAG_CANDIDATE_K = int(os.getenv("RAG_CANDIDATE_K", "20"))
+    # 交叉编码重排模型（fastembed）；留空 = 禁用。可选 "BAAI/bge-reranker-base"（约 1GB，HF 镜像下载）
+    RERANK_MODEL = os.getenv("RERANK_MODEL", "")
+    # 查询改写（辅助模型生成多个检索变体）
+    RAG_QUERY_REWRITE = os.getenv("RAG_QUERY_REWRITE", "true").lower() in ("1", "true", "yes", "on")
 
     # ── 监控告警 ──────────────────────────────────────────────────
     ALERT_SUCCESS_RATE = float(os.getenv("ALERT_SUCCESS_RATE", "90"))  # 低于该成功率告警
@@ -138,6 +152,22 @@ class Config:
     AGENT_NO_PROGRESS_LIMIT = int(os.getenv("AGENT_NO_PROGRESS_LIMIT", "3"))  # 连续无新发现上限
     # 单次工具调用的超时（秒），保证「取消」能打断进行中的工具
     AGENT_TOOL_TIMEOUT = float(os.getenv("AGENT_TOOL_TIMEOUT", "180"))
+
+    # ── Agent 上下文管理（v3）─────────────────────────────────────
+    # 估算 token 超过该值时触发滚动压缩（保留最近 K 步原文，更早的压缩为摘要）
+    AGENT_CONTEXT_TOKEN_BUDGET = int(os.getenv("AGENT_CONTEXT_TOKEN_BUDGET", "24000"))
+    AGENT_CONTEXT_KEEP_RECENT_STEPS = int(os.getenv("AGENT_CONTEXT_KEEP_RECENT_STEPS", "4"))
+
+    # ── 辅助模型（v3）：廉价后台任务用本地 Ollama，零 token 成本 ──
+    # 用途：上下文压缩摘要、（RAG 的）查询改写。留空 = 禁用。
+    # 运行时健康探测失败会自动回退主模型，功能不降级。
+    AUX_LLM_PROVIDER = os.getenv("AUX_LLM_PROVIDER", "ollama")  # ollama|deepseek|openai|qwen|""
+    AUX_LLM_MODEL = os.getenv("AUX_LLM_MODEL", "qwen3:8b")
+    AUX_LLM_BASE_URL = os.getenv("AUX_LLM_BASE_URL", "http://localhost:11434")
+    AUX_LLM_TIMEOUT = float(os.getenv("AUX_LLM_TIMEOUT", "45"))
+    AUX_LLM_MAX_RETRIES = int(os.getenv("AUX_LLM_MAX_RETRIES", "1"))
+    # 健康探测结果缓存秒数（避免每个后台任务都探测一次）
+    AUX_LLM_HEALTH_INTERVAL = float(os.getenv("AUX_LLM_HEALTH_INTERVAL", "60"))
 
     # ── API 访问控制 ──────────────────────────────────────────────
     # 留空 = 不鉴权（仅建议本机使用）；部署到公网请务必设置

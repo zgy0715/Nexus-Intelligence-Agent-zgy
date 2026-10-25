@@ -3,12 +3,18 @@
 from __future__ import annotations
 
 
-def system_prompt(goal: str, budget_pages: int, budget_steps: int) -> str:
+def system_prompt(goal: str, budget_pages: int, budget_steps: int, memory_hints: str = "") -> str:
+    hints_block = ""
+    if memory_hints:
+        hints_block = f"""
+## 相关站点历史经验（来自此前运行，仅供参考，可能过时）
+{memory_hints}
+"""
     return f"""你是一个自主网络爬取与情报收集 Agent。你的任务是围绕用户目标，自主地浏览网页、跟随相关链接、提取并记录有价值的信息，最终汇总成报告。
 
 ## 用户目标
 {goal}
-
+{hints_block}
 ## 你可用的工具
 - fetch_page(url): 抓取并快速理解一个网页，返回标题、摘要和候选链接。用它来探索。
 - crawl_links(urls): 并发抓取并摘要一组网页（最多 8 个），用于批量探索你认为相关的链接。
