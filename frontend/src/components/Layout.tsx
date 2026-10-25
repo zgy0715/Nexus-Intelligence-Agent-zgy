@@ -3,6 +3,7 @@
  */
 
 import { NavLink, Outlet } from "react-router-dom";
+import { CommandPalette } from "./CommandPalette";
 import {
   Bot,
   Globe,
@@ -103,6 +104,8 @@ export default function Layout() {
           )}
         </div>
       </aside>
+
+      <CommandPalette />
 
       {/* 主内容区 */}
       <div className="flex min-w-0 flex-1 flex-col">

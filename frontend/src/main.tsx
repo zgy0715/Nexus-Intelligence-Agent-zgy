@@ -1,3 +1,4 @@
+import { StrictMode } from "react";
 import { BrowserRouter } from "react-router-dom";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -16,12 +17,15 @@ const queryClient = new QueryClient({
   },
 });
 
-// 不用 StrictMode，避免和 echarts/lucide 等库冲突导致 insertBefore 错误
+// v3：React 19 + StrictMode 回归（echarts 双挂载问题由 <Chart> 封装的
+// 正确 dispose 生命周期解决，不再靠禁用 StrictMode 掩盖）
 createRoot(document.getElementById("root")!).render(
-  <QueryClientProvider client={queryClient}>
-    <BrowserRouter>
-      <App />
-      <Toaster position="top-right" richColors closeButton theme={useStore.getState().theme} />
-    </BrowserRouter>
-  </QueryClientProvider>,
+  <StrictMode>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <App />
+        <Toaster position="top-right" richColors closeButton theme={useStore.getState().theme} />
+      </BrowserRouter>
+    </QueryClientProvider>
+  </StrictMode>,
 );

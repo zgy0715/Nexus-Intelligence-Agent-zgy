@@ -1,8 +1,13 @@
 /**
- * 监控面板 — 实时指标 + 域名分布图表 (ECharts，适配暗色)
+ * 监控面板 — 实时指标 + 时间序列 + 域名分布（ECharts，随主题变色）。
+ *
+ * v3：数据层迁移 TanStack Query（refetchInterval 替代手写 setInterval），
+ * 图表走 <Chart> 封装（echarts/core 按需 + CSS token 取色），
+ * 新增 14 天任务量/成功率时间序列图。
  */
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useQuery } from "@tanstack/react-query";
+import { useMemo } from "react";
 import {
   Activity,
   ListChecks,
@@ -13,33 +18,32 @@ import {
   AlertTriangle,
   RefreshCw,
 } from "lucide-react";
-import * as echarts from "echarts";
 import { api } from "@/api/client";
-import { useStore } from "@/store";
-import type { MonitorStats } from "@/types";
+import type { EChartsCoreOption } from "echarts/core";
+import { Chart, useChartTheme } from "@/components/Chart";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { Skeleton } from "@/components/ui/Skeleton";
-
-interface DomainStat {
-  domain: string;
-  count: number;
-}
+import { EmptyState } from "@/components/ui/EmptyState";
 
 function MetricCard({
   icon: Icon,
   label,
   value,
+  tone,
 }: {
   icon: React.ElementType;
   label: string;
   value: string | number;
+  tone?: "danger";
 }) {
   return (
     <Card className="p-4">
       <div className="flex items-center justify-between">
         <div>
-          <p className="text-2xl font-bold text-foreground">{value}</p>
+          <p className={`text-2xl font-bold ${tone === "danger" ? "text-destructive" : "text-foreground"}`}>
+            {value}
+          </p>
           <p className="mt-1 text-xs text-muted-foreground">{label}</p>
         </div>
         <div className="rounded-xl bg-accent p-2.5 text-accent-foreground">
@@ -50,189 +54,196 @@ function MetricCard({
   );
 }
 
-function BarChart({ data, dark }: { data: DomainStat[]; dark: boolean }) {
-  const chartRef = useRef<HTMLDivElement>(null);
-  const instanceRef = useRef<echarts.ECharts | null>(null);
+export default function MonitorPage() {
+  const t = useChartTheme();
 
-  useEffect(() => {
-    if (!chartRef.current) return;
-    instanceRef.current = echarts.init(chartRef.current);
-    const handleResize = () => instanceRef.current?.resize();
-    window.addEventListener("resize", handleResize);
-    return () => {
-      window.removeEventListener("resize", handleResize);
-      instanceRef.current?.dispose();
-      instanceRef.current = null;
-    };
-  }, []);
+  const statsQuery = useQuery({
+    queryKey: ["monitor-stats"],
+    queryFn: api.getMonitorStats,
+    refetchInterval: 30_000,
+  });
+  const domainsQuery = useQuery({
+    queryKey: ["monitor-domains"],
+    queryFn: api.getMonitorDomains,
+    refetchInterval: 60_000,
+  });
+  const tsQuery = useQuery({
+    queryKey: ["monitor-timeseries"],
+    queryFn: () => api.getMonitorTimeseries(14),
+    refetchInterval: 60_000,
+  });
+  const alertQuery = useQuery({
+    queryKey: ["monitor-alert"],
+    queryFn: api.getMonitorAlert,
+    refetchInterval: 60_000,
+  });
 
-  useEffect(() => {
-    const chart = instanceRef.current;
-    if (!chart || data.length === 0) return;
-    const axisColor = dark ? "#475569" : "#e5e7eb";
-    const labelColor = dark ? "#94a3b8" : "#9ca3af";
-    const splitColor = dark ? "#1e293b" : "#f3f4f6";
-    chart.setOption({
+  const stats = statsQuery.data;
+  const domains = domainsQuery.data?.domains ?? [];
+  const series = tsQuery.data?.series ?? [];
+  const alert = alertQuery.data?.alert;
+
+  const domainOption = useMemo<EChartsCoreOption>(() => {
+    const top = domains.slice(0, 10);
+    return {
       tooltip: {
         trigger: "axis",
-        backgroundColor: dark ? "#1e293b" : "#fff",
-        borderColor: axisColor,
-        textStyle: { color: dark ? "#e2e8f0" : "#374151", fontSize: 12 },
+        backgroundColor: t.tooltipBg,
+        borderColor: t.tooltipBorder,
+        textStyle: { color: t.tooltipText, fontSize: 12 },
       },
-      grid: { left: "3%", right: "4%", bottom: "3%", containLabel: true },
+      grid: { left: 8, right: 16, top: 24, bottom: 8, containLabel: true },
       xAxis: {
         type: "category",
-        data: data.map((d) => d.domain),
-        axisLine: { lineStyle: { color: axisColor } },
-        axisLabel: { color: labelColor, fontSize: 11 },
+        data: top.map((d) => d.domain),
+        axisLabel: { color: t.label, fontSize: 11, rotate: 24, truncate: { width: 90 } },
+        axisLine: { lineStyle: { color: t.axis } },
+        axisTick: { show: false },
       },
       yAxis: {
         type: "value",
-        axisLine: { show: false },
-        splitLine: { lineStyle: { color: splitColor } },
-        axisLabel: { color: labelColor, fontSize: 11 },
+        axisLabel: { color: t.label, fontSize: 11 },
+        splitLine: { lineStyle: { color: t.split } },
       },
       series: [
         {
           type: "bar",
-          data: data.map((d) => d.count),
-          itemStyle: {
-            color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
-              { offset: 0, color: "#6366f1" },
-              { offset: 1, color: "#818cf8" },
-            ]),
-            borderRadius: [6, 6, 0, 0],
-          },
-          barWidth: "50%",
+          data: top.map((d) => d.count),
+          itemStyle: { color: t.brand, borderRadius: [4, 4, 0, 0] },
+          barMaxWidth: 28,
         },
       ],
-    });
-  }, [data, dark]);
-
-  return <div ref={chartRef} style={{ height: 280, width: "100%" }} />;
-}
-
-export default function MonitorPage() {
-  const [stats, setStats] = useState<MonitorStats | null>(null);
-  const [domains, setDomains] = useState<DomainStat[]>([]);
-  const [alert, setAlert] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const mountedRef = useRef(true);
-  const dark = useStore((s) => s.theme === "dark");
-
-  useEffect(() => {
-    mountedRef.current = true;
-    return () => {
-      mountedRef.current = false;
     };
-  }, []);
+  }, [domains, t]);
 
-  const loadAll = useCallback(async () => {
-    try {
-      const [s, d, a] = await Promise.all([
-        api.getMonitorStats(),
-        api.getMonitorDomains(),
-        api.getMonitorAlert(),
-      ]);
-      if (!mountedRef.current) return;
-      setStats(s);
-      setDomains(d.domains);
-      setAlert(a.alert);
-      setError(null);
-    } catch (e) {
-      if (!mountedRef.current) return;
-      setError(e instanceof Error ? e.message : "加载监控数据失败");
-    } finally {
-      if (mountedRef.current) setLoading(false);
-    }
-  }, []);
+  const timeseriesOption = useMemo<EChartsCoreOption>(() => {
+    return {
+      tooltip: {
+        trigger: "axis",
+        backgroundColor: t.tooltipBg,
+        borderColor: t.tooltipBorder,
+        textStyle: { color: t.tooltipText, fontSize: 12 },
+      },
+      legend: {
+        data: ["任务量", "成功率 %"],
+        textStyle: { color: t.label, fontSize: 11 },
+        top: 0,
+      },
+      grid: { left: 8, right: 8, top: 32, bottom: 8, containLabel: true },
+      xAxis: {
+        type: "category",
+        data: series.map((p) => p.day.slice(5)),
+        axisLabel: { color: t.label, fontSize: 11 },
+        axisLine: { lineStyle: { color: t.axis } },
+        axisTick: { show: false },
+      },
+      yAxis: [
+        {
+          type: "value",
+          name: "任务",
+          axisLabel: { color: t.label, fontSize: 11 },
+          splitLine: { lineStyle: { color: t.split } },
+        },
+        {
+          type: "value",
+          name: "%",
+          min: 0,
+          max: 100,
+          axisLabel: { color: t.label, fontSize: 11 },
+          splitLine: { show: false },
+        },
+      ],
+      series: [
+        {
+          name: "任务量",
+          type: "bar",
+          data: series.map((p) => p.total),
+          itemStyle: { color: t.brand, borderRadius: [3, 3, 0, 0] },
+          barMaxWidth: 18,
+        },
+        {
+          name: "成功率 %",
+          type: "line",
+          yAxisIndex: 1,
+          data: series.map((p) => p.success_rate),
+          smooth: true,
+          symbol: "circle",
+          symbolSize: 6,
+          lineStyle: { color: t.success, width: 2 },
+          itemStyle: { color: t.success },
+        },
+      ],
+    };
+  }, [series, t]);
 
-  useEffect(() => {
-    loadAll();
-    const interval = setInterval(loadAll, 30000);
-    return () => clearInterval(interval);
-  }, [loadAll]);
-
-  if (loading) {
-    return (
-      <div className="mx-auto max-w-5xl space-y-6 p-6">
-        <Skeleton className="h-10 w-48" />
-        <Skeleton className="h-12 w-full" />
-        <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-24" />
-          ))}
-        </div>
-        <Skeleton className="h-72 w-full" />
-      </div>
-    );
-  }
+  const loading = statsQuery.isLoading;
 
   return (
-    <div className="mx-auto max-w-5xl space-y-6 p-6">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary">
-            <Activity className="text-primary-foreground" size={22} />
-          </div>
-          <div>
-            <h1 className="text-xl font-bold text-foreground">任务监控</h1>
-            <p className="text-xs text-muted-foreground">系统运行状态和任务统计</p>
-          </div>
+    <div className="mx-auto max-w-7xl p-4 lg:p-6">
+      {/* 标题 */}
+      <div className="mb-6 flex items-center gap-3">
+        <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary shadow-sm">
+          <Activity className="h-6 w-6 text-primary-foreground" />
         </div>
-        <Button variant="outline" size="sm" onClick={loadAll}>
-          <RefreshCw size={14} /> 刷新
+        <div className="min-w-0 flex-1">
+          <h1 className="text-xl font-bold text-foreground">任务监控</h1>
+          <p className="text-sm text-muted-foreground">系统运行状态与统计图表（每 30 秒自动刷新）</p>
+        </div>
+        <Button variant="outline" size="sm" onClick={() => { statsQuery.refetch(); domainsQuery.refetch(); tsQuery.refetch(); }}>
+          <RefreshCw className="h-4 w-4" /> 刷新
         </Button>
       </div>
 
-      {error ? (
-        <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          <AlertTriangle size={16} />
-          {error}
-        </div>
-      ) : stats?.degraded ? (
-        <div className="flex items-center gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-amber-600">
-          <AlertTriangle size={16} />
-          部分依赖不可用（MySQL 或 Redis 未连接），统计数据可能不完整
-        </div>
-      ) : alert ? (
-        <div className="flex items-center gap-2 rounded-xl border border-destructive/30 bg-destructive/10 px-4 py-3 text-sm text-destructive">
-          <AlertTriangle size={16} />
+      {/* 告警横幅 */}
+      {alert && (
+        <div className="mb-6 flex items-center gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-4 py-2.5 text-sm text-destructive">
+          <AlertTriangle className="h-4 w-4 shrink-0" />
           {alert}
-        </div>
-      ) : (
-        <div className="flex items-center gap-2 rounded-xl border border-success/30 bg-success/10 px-4 py-3 text-sm text-success">
-          <Activity size={16} />
-          系统运行正常
         </div>
       )}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <MetricCard icon={ListChecks} label="总任务数" value={stats?.total_tasks ?? "-"} />
-        <MetricCard icon={TrendingUp} label="成功率" value={stats != null ? `${stats.success_rate}%` : "-"} />
-        <MetricCard icon={Cpu} label="LLM 调用" value={stats?.llm_calls ?? "-"} />
-        <MetricCard icon={Clock} label="平均 LLM 耗时" value={stats != null ? `${stats.avg_llm_time_ms ?? stats.avg_llm_time ?? 0}ms` : "-"} />
-      </div>
+      {/* 指标卡 */}
+      {loading ? (
+        <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, i) => (
+            <Skeleton key={i} className="h-20" />
+          ))}
+        </div>
+      ) : (
+        <div className="mb-6 grid grid-cols-2 gap-3 md:grid-cols-3 xl:grid-cols-6">
+          <MetricCard icon={ListChecks} label="总任务数" value={stats?.total_tasks ?? 0} />
+          <MetricCard
+            icon={TrendingUp}
+            label="成功率"
+            value={`${stats?.success_rate ?? 0}%`}
+            tone={(stats?.success_rate ?? 100) < 80 ? "danger" : undefined}
+          />
+          <MetricCard icon={Cpu} label="LLM 调用" value={stats?.llm_calls ?? 0} />
+          <MetricCard icon={Clock} label="平均 LLM 耗时" value={`${stats?.avg_llm_time_ms ?? 0}ms`} />
+          <MetricCard icon={Inbox} label="队列待处理" value={stats?.queue_pending ?? 0} />
+          <MetricCard icon={AlertTriangle} label="失败任务" value={(stats?.total_tasks ?? 0) - (stats?.finished_tasks ?? 0)} />
+        </div>
+      )}
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
-        <MetricCard icon={Inbox} label="队列待处理" value={stats?.queue_pending ?? "-"} />
-        <MetricCard icon={AlertTriangle} label="失败任务" value={stats?.dead_letter_count ?? "-"} />
-        <MetricCard icon={Clock} label="平均爬取耗时" value={stats != null ? `${stats.avg_crawl_time_ms ?? 0}ms` : "-"} />
-        <MetricCard icon={Cpu} label="平均 LLM 调用" value={stats?.avg_llm_calls ?? "-"} />
+      {/* 图表：时间序列 + 域名分布 */}
+      <div className="grid gap-6 lg:grid-cols-2">
+        <Card className="p-4">
+          <h2 className="mb-3 text-sm font-semibold text-foreground">近 14 天任务与成功率</h2>
+          {series.length === 0 ? (
+            <EmptyState icon={Activity} title="暂无时间序列数据" description="爬取任务完成后这里会出现按天统计的柱状图与成功率曲线。" />
+          ) : (
+            <Chart option={timeseriesOption} className="h-72 w-full" />
+          )}
+        </Card>
+        <Card className="p-4">
+          <h2 className="mb-3 text-sm font-semibold text-foreground">域名分布 TOP10</h2>
+          {domains.length === 0 ? (
+            <EmptyState icon={Activity} title="暂无数据" description="爬取到页面后这里会展示真实域名分布。" />
+          ) : (
+            <Chart option={domainOption} className="h-72 w-full" />
+          )}
+        </Card>
       </div>
-
-      <Card className="p-5">
-        <h2 className="mb-4 text-sm font-medium text-muted-foreground">域名分布</h2>
-        {domains.length === 0 ? (
-          <div className="py-12 text-center">
-            <Activity size={24} className="mx-auto mb-2 text-muted-foreground/40" />
-            <p className="text-sm text-muted-foreground">暂无数据</p>
-          </div>
-        ) : (
-          <BarChart data={domains} dark={dark} />
-        )}
-      </Card>
     </div>
   );
 }

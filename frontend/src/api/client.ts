@@ -9,8 +9,11 @@ import type {
   ServiceStatus,
   Source,
   AgentEvent,
+  AgentEventReplay,
   AgentRunSummary,
   BatchEvent,
+  QueryStreamEvent,
+  TimeseriesPoint,
 } from '@/types';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || '/api';
@@ -145,6 +148,11 @@ export const api = {
     return request<{ runs: AgentRunSummary[] }>(`/agent?limit=${limit}`);
   },
 
+  /** 历史回放：读取某次运行的完整事件列表（内存优先，回退 Redis Stream） */
+  getAgentEvents(runId: string, after = 0) {
+    return request<AgentEventReplay>(`/agent/${runId}/events?after=${after}`);
+  },
+
   // ── 爬取 ────────────────────────────────────────────────────────
 
   crawl(url: string, instruction: string, useJs?: boolean) {
@@ -233,6 +241,70 @@ export const api = {
     });
   },
 
+  /**
+   * 流式问答（POST SSE）。EventSource 不支持 POST，这里用 fetch + ReadableStream
+   * 手工解析 SSE 帧：sources → delta* → done（终止符 data: [DONE]）。
+   * @returns abort 函数（停止生成）
+   */
+  streamQuery(
+    question: string,
+    onEvent: (e: QueryStreamEvent) => void,
+    signal?: AbortSignal,
+  ): () => void {
+    const controller = new AbortController();
+    const onAbort = () => controller.abort();
+    signal?.addEventListener('abort', onAbort);
+
+    (async () => {
+      try {
+        const res = await fetch(`${BASE_URL}/query/stream`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders() },
+          body: JSON.stringify({ question }),
+          signal: controller.signal,
+        });
+        if (!res.ok || !res.body) {
+          const raw = await res.text().catch(() => '');
+          onEvent({ type: 'error', message: raw.slice(0, 200) || `HTTP ${res.status}` });
+          return;
+        }
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let finished = false;
+        while (!finished) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const blocks = buffer.split('\n\n');
+          buffer = blocks.pop() ?? '';
+          for (const block of blocks) {
+            const line = block.split('\n').find((l) => l.startsWith('data: '));
+            if (!line) continue;
+            const payload = line.slice(6);
+            if (payload === '[DONE]') {
+              finished = true;
+              break;
+            }
+            try {
+              onEvent(JSON.parse(payload) as QueryStreamEvent);
+            } catch {
+              /* 跳过坏帧 */
+            }
+          }
+        }
+      } catch (e) {
+        if (!(e instanceof DOMException && e.name === 'AbortError')) {
+          onEvent({ type: 'error', message: e instanceof Error ? e.message : String(e) });
+        }
+      } finally {
+        signal?.removeEventListener('abort', onAbort);
+      }
+    })();
+
+    return () => controller.abort();
+  },
+
   getQueryHistory(limit = 50) {
     return request<{ history: ChatMessage[] }>(`/query/history?limit=${limit}`);
   },
@@ -268,6 +340,10 @@ export const api = {
 
   getMonitorAlert() {
     return request<{ alert: string | null }>('/monitor/alert');
+  },
+
+  getMonitorTimeseries(days = 14) {
+    return request<{ series: TimeseriesPoint[] }>(`/monitor/timeseries?days=${days}`);
   },
 
   // ── 设置 ────────────────────────────────────────────────────────

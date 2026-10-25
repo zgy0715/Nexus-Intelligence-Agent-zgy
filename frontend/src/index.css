@@ -1,63 +1,113 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+/* class 策略的暗色模式（<html class="dark">，由 Zustand 持久化驱动） */
+@custom-variant dark (&:where(.dark, .dark *));
 
 /* ─────────────────────────────────────────────────────────────
-   设计 Token — 近无彩黑白灰（Linear / Vercel 风），明/暗双主题
+   设计 Token — 近无彩黑白灰（Linear / Vercel 风）+ 品牌靛蓝强调色
    暗色：近黑背景 + 近白主色按钮；明色：近白背景 + 近黑主色按钮
+   Tailwind 4：语义色经 @theme inline 映射为 utilities（bg-background 等）
    ───────────────────────────────────────────────────────────── */
+:root {
+  --background: 0 0% 99%;
+  --foreground: 240 6% 10%;
+  --card: 0 0% 100%;
+  --card-foreground: 240 6% 10%;
+  --popover: 0 0% 100%;
+  --popover-foreground: 240 6% 10%;
+  --primary: 240 6% 10%;
+  --primary-foreground: 0 0% 98%;
+  --secondary: 240 5% 96%;
+  --secondary-foreground: 240 6% 10%;
+  --muted: 240 5% 96%;
+  --muted-foreground: 240 4% 44%;
+  --accent: 240 5% 94%;
+  --accent-foreground: 240 6% 10%;
+  --success: 142 64% 38%;
+  --warning: 32 90% 44%;
+  --destructive: 0 72% 51%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 6% 90%;
+  --input: 240 6% 90%;
+  --ring: 240 5% 45%;
+  --glow: 240 8% 55%;
+  --brand: 238 74% 62%;
+  --brand-foreground: 0 0% 100%;
+  --radius: 0.7rem;
+}
+
+.dark {
+  --background: 240 6% 7%;
+  --foreground: 0 0% 98%;
+  --card: 240 5% 10%;
+  --card-foreground: 0 0% 98%;
+  --popover: 240 5% 11%;
+  --popover-foreground: 0 0% 98%;
+  --primary: 0 0% 98%;
+  --primary-foreground: 240 6% 9%;
+  --secondary: 240 4% 15%;
+  --secondary-foreground: 0 0% 98%;
+  --muted: 240 4% 15%;
+  --muted-foreground: 240 5% 63%;
+  --accent: 240 4% 16%;
+  --accent-foreground: 0 0% 98%;
+  --success: 142 58% 47%;
+  --warning: 38 92% 56%;
+  --destructive: 0 72% 58%;
+  --destructive-foreground: 0 0% 98%;
+  --border: 240 4% 16%;
+  --input: 240 4% 17%;
+  --ring: 0 0% 72%;
+  --glow: 0 0% 100%;
+  --brand: 238 80% 68%;
+  --brand-foreground: 240 6% 9%;
+}
+
+@theme inline {
+  --color-border: hsl(var(--border));
+  --color-input: hsl(var(--input));
+  --color-ring: hsl(var(--ring));
+  --color-background: hsl(var(--background));
+  --color-foreground: hsl(var(--foreground));
+  --color-primary: hsl(var(--primary));
+  --color-primary-foreground: hsl(var(--primary-foreground));
+  --color-secondary: hsl(var(--secondary));
+  --color-secondary-foreground: hsl(var(--secondary-foreground));
+  --color-muted: hsl(var(--muted));
+  --color-muted-foreground: hsl(var(--muted-foreground));
+  --color-accent: hsl(var(--accent));
+  --color-accent-foreground: hsl(var(--accent-foreground));
+  --color-destructive: hsl(var(--destructive));
+  --color-destructive-foreground: hsl(var(--destructive-foreground));
+  --color-success: hsl(var(--success));
+  --color-warning: hsl(var(--warning));
+  --color-card: hsl(var(--card));
+  --color-card-foreground: hsl(var(--card-foreground));
+  --color-popover: hsl(var(--popover));
+  --color-popover-foreground: hsl(var(--popover-foreground));
+  --color-brand: hsl(var(--brand));
+  --color-brand-foreground: hsl(var(--brand-foreground));
+
+  --radius-lg: var(--radius);
+  --radius-md: calc(var(--radius) - 4px);
+  --radius-sm: calc(var(--radius) - 8px);
+
+  --font-mono: "JetBrains Mono", ui-monospace, monospace;
+
+  --animate-fade-in: fade-in 0.3s ease-out;
+  --animate-slide-in-right: slide-in-right 0.3s ease-out;
+}
+
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes slide-in-right {
+  from { opacity: 0; transform: translateX(12px); }
+  to { opacity: 1; transform: translateX(0); }
+}
+
 @layer base {
-  :root {
-    --background: 0 0% 99%;
-    --foreground: 240 6% 10%;
-    --card: 0 0% 100%;
-    --card-foreground: 240 6% 10%;
-    --popover: 0 0% 100%;
-    --popover-foreground: 240 6% 10%;
-    --primary: 240 6% 10%;
-    --primary-foreground: 0 0% 98%;
-    --secondary: 240 5% 96%;
-    --secondary-foreground: 240 6% 10%;
-    --muted: 240 5% 96%;
-    --muted-foreground: 240 4% 44%;
-    --accent: 240 5% 94%;
-    --accent-foreground: 240 6% 10%;
-    --success: 142 64% 38%;
-    --warning: 32 90% 44%;
-    --destructive: 0 72% 51%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 6% 90%;
-    --input: 240 6% 90%;
-    --ring: 240 5% 45%;
-    --glow: 240 8% 55%;
-    --radius: 0.7rem;
-  }
-
-  .dark {
-    --background: 240 6% 7%;
-    --foreground: 0 0% 98%;
-    --card: 240 5% 10%;
-    --card-foreground: 0 0% 98%;
-    --popover: 240 5% 11%;
-    --popover-foreground: 0 0% 98%;
-    --primary: 0 0% 98%;
-    --primary-foreground: 240 6% 9%;
-    --secondary: 240 4% 15%;
-    --secondary-foreground: 0 0% 98%;
-    --muted: 240 4% 15%;
-    --muted-foreground: 240 5% 63%;
-    --accent: 240 4% 16%;
-    --accent-foreground: 0 0% 98%;
-    --success: 142 58% 47%;
-    --warning: 38 92% 56%;
-    --destructive: 0 72% 58%;
-    --destructive-foreground: 0 0% 98%;
-    --border: 240 4% 16%;
-    --input: 240 4% 17%;
-    --ring: 0 0% 72%;
-    --glow: 0 0% 100%;
-  }
-
   * {
     @apply border-border;
   }
@@ -72,12 +122,10 @@
   body {
     @apply text-foreground antialiased;
     background-color: hsl(var(--background));
-    /* 顶部柔和光晕，制造层次与高级感 */
-    background-image: radial-gradient(
-      48rem 24rem at 50% -8%,
-      hsl(var(--glow) / 0.05),
-      transparent 70%
-    );
+    /* 顶部柔和光晕 + 品牌色微光，制造层次与高级感 */
+    background-image:
+      radial-gradient(48rem 24rem at 50% -8%, hsl(var(--glow) / 0.05), transparent 70%),
+      radial-gradient(36rem 18rem at 88% -4%, hsl(var(--brand) / 0.05), transparent 70%);
     background-attachment: fixed;
     font-family: "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
       "Microsoft YaHei", sans-serif;
@@ -124,12 +172,8 @@
     animation: shimmer 1.4s ease infinite;
   }
   @keyframes shimmer {
-    0% {
-      background-position: 100% 50%;
-    }
-    100% {
-      background-position: 0 50%;
-    }
+    0% { background-position: 100% 50%; }
+    100% { background-position: 0 50%; }
   }
 
   .text-gradient {
