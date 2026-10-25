@@ -1,57 +1,59 @@
 # Nexus Intelligence Agent (NIA)
 
-[![React](https://img.shields.io/badge/React-18-61DAFB?style=flat&logo=react&logoColor=white)](https://reactjs.org/)
+[![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react&logoColor=white)](https://reactjs.org/)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.8-3178C6?style=flat&logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
-[![Vite](https://img.shields.io/badge/Vite-6.4-646CFF?style=flat&logo=vite&logoColor=white)](https://vitejs.dev/)
-[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-3.4-06B6D4?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
+[![Vite](https://img.shields.io/badge/Vite-8-646CFF?style=flat&logo=vite&logoColor=white)](https://vitejs.dev/)
+[![Tailwind CSS](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?style=flat&logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.109-009688?style=flat&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
-[![Python](https://img.shields.io/badge/Python-3.11-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
-[![Redis](https://img.shields.io/badge/Redis-7-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io/)
+[![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=flat&logo=python&logoColor=white)](https://www.python.org/)
+[![Redis](https://img.shields.io/badge/Redis-5+-DC382D?style=flat&logo=redis&logoColor=white)](https://redis.io/)
 [![MySQL](https://img.shields.io/badge/MySQL-8-4479A1?style=flat&logo=mysql&logoColor=white)](https://www.mysql.com/)
-[![ECharts](https://img.shields.io/badge/ECharts-5.5-AA344D?style=flat&logo=apacheecharts&logoColor=white)](https://echarts.apache.org/)
+[![ECharts](https://img.shields.io/badge/ECharts-6-AA344D?style=flat&logo=apacheecharts&logoColor=white)](https://echarts.apache.org/)
 [![Zustand](https://img.shields.io/badge/Zustand-5.0-333?style=flat)](https://zustand-demo.pmnd.rs/)
 [![Node.js](https://img.shields.io/badge/Node.js-18+-339933?style=flat&logo=node.js&logoColor=white)](https://nodejs.org/)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-V3-4D6BFE?style=flat)](https://platform.deepseek.com/)
+[![Ollama](https://img.shields.io/badge/Ollama-辅助模型-000?style=flat&logo=ollama&logoColor=white)](https://ollama.com/)
 
-下一代智能网络爬虫与情报分析系统 —— 基于 DeepSeek 的**自主爬取 Agent** + 并发爬取引擎，精简到只需 Redis + MySQL。
+下一代智能网络爬虫与情报分析系统 —— 基于 DeepSeek 的**自主爬取 Agent** + 并发爬取引擎 + **混合检索 RAG**，精简到只需 Redis + MySQL（本地 Ollama 可选加速）。
 
 ## 核心特性
 
-- **🤖 自主爬取 Agent** - 给定目标与种子 URL，Agent 用原生 tool-calling 自主规划爬哪些页、跟随链接、判断何时停止、提取并汇总成报告，全程 SSE 实时流式可视化（对标 Firecrawl / browser-use）
-- **⚡ 并发爬取引擎** - 异步抓取 + 共享连接池 + 信号量限流 + 退避重试 + 缓存；支持批量 URL 与整站 BFS（相比旧串行实现数量级提速）
-- **多 Provider LLM 支持** - DeepSeek / OpenAI / Qwen / Ollama，一处配置，处处可用；async + tool-calling + 流式
-- **采集与分析一体化** - 内置 RAG 语义检索和自然语言问答
-- **🪶 精简基础设施** - Embedding 走本地 fastembed（ONNX/CPU，无需 Ollama），向量库用本地 FAISS（无需 Docker/Qdrant），只依赖 Redis + MySQL
-- **🎨 高级感前端** - React + TypeScript + shadcn 风格组件 + Linear/Vercel 近无彩黑白灰设计 + 明暗双主题（默认暗色）+ ECharts
+- **🤖 自主爬取 Agent v3** - 原生 tool-calling 多步循环：**上下文滚动压缩**（长任务不爆窗口）、同批工具**并行执行**、Pydantic 类型化工具注册表（schema 自动生成）、**领域记忆**（同站点经验注入）、token/成本实时仪表；全程 SSE 实时流式可视化，支持断线重连（Last-Event-ID）与**历史运行回放**
+- **⚡ 并发爬取引擎 v3** - 异步抓取 + **trafilatura 正文密度提取**（导航/页脚噪声不再污染 LLM）+ 抓取与 LLM 提取**流水线重叠** + **HTML 磁盘缓存**（重复任务零网络请求）+ 锚文本目标相关性打分 + SSRF 纵深防御
+- **🔀 混合检索 RAG** - BM25（jieba 分词）+ 向量双路召回 **RRF 融合** + **Ollama 查询改写**（本地模型，零 token 成本）+ 可选交叉编码重排（`RERANK_MODEL`）+ 流式问答（`POST /api/query/stream`）
+- **🧠 模型路由** - 主模型（DeepSeek）只做推理/报告；后台杂事（摘要、查询改写）路由到**本地 Ollama 辅助模型**，不可用自动回退，功能不降级
+- **🎨 前端 2026 技术栈** - React 19 + Vite 8 (Rolldown) + Tailwind CSS 4（CSS-first）+ ECharts 6 按需引入 + TanStack Query / react-virtual / motion；**首屏 bundle 1.49MB → 237KB（-84%）**；Ctrl+K 命令面板、明暗双主题、黑白灰精修 + 品牌靛蓝
+- **🪶 精简基础设施** - Embedding 走本地 fastembed（ONNX/CPU），向量库用本地 FAISS（**IndexIDMap2**，O(1) 删除 + 一键重建），只依赖 Redis + MySQL
 
 ## 技术栈
 
 | 层级 | 技术 | 说明 |
 |------|------|------|
-| 前端框架 | React 18 + TypeScript + Vite | 现代化 SPA 应用 |
-| 前端样式 | Tailwind CSS + shadcn 风格组件 | Linear 风近无彩设计 token + 明暗双主题 |
-| 图表 | ECharts | 监控数据可视化（适配暗色） |
-| 状态管理 | Zustand (persist) | 轻量级响应式状态 + 主题持久化 |
-| 路由 | React Router v7 | 客户端路由 |
-| 通知/数据 | sonner + TanStack Query | 全局通知 + 服务端状态 |
+| 前端框架 | React 19 + TypeScript + Vite 8 | React 19（StrictMode 回归）+ Rolldown 构建 + 路由级代码分割 |
+| 前端样式 | Tailwind CSS 4 + 自建组件库 | CSS-first 配置（@theme），黑白灰 + 品牌靛蓝强调色 |
+| 图表 | ECharts 6（按需引入） | 统一 `<Chart>` 封装，颜色读 CSS token 随主题变色 |
+| 数据层 | TanStack Query + react-virtual | 服务端状态 + 虚拟化时间线/表格 |
+| 动效 | motion（原 framer-motion） | 时间线/面板过渡动画 |
+| 路由 | React Router v7 | 客户端路由 + lazy 分包 |
 | 后端 API | FastAPI | Python 异步 Web 框架 |
-| 爬取引擎 | httpx (async) + asyncio | 并发抓取 + 连接池 + 信号量 + 重试 |
-| Agent | 原生 tool-calling（OpenAI 兼容） | 自主多步爬取，无需 LangChain/LangGraph |
-| JS 渲染 | Crawl4AI（可选） | 异步浏览器池，按需启动 |
-| 主力 LLM | DeepSeek-V3 | 便宜、中文强、JSON 输出稳定 |
-| Embedding | fastembed (本地 ONNX) | 默认 `BAAI/bge-small-zh-v1.5`（512 维，约 90MB），CPU 即可，无需 Ollama |
-| 缓存/锁 | Redis | 提取缓存 / SSE |
+| 爬取引擎 | httpx (async) + trafilatura | 并发抓取 + 正文密度提取 + 流水线 + HTML 缓存 |
+| Agent | 原生 tool-calling（OpenAI 兼容） | 上下文压缩 + 并行工具 + 类型化注册表 + 领域记忆 |
+| 主力 LLM | DeepSeek-V3 | 推理 / 工具调用 / 报告 |
+| 辅助模型 | Ollama（本地，可选） | 上下文摘要 / 查询改写；默认 `qwen3:8b`，不可用自动回退 |
+| Embedding | fastembed (本地 ONNX) | 默认 `BAAI/bge-small-zh-v1.5`（512 维），CPU 即可 |
+| 检索 | FAISS IndexIDMap2 + BM25(rank-bm25+jieba) | 双路召回 RRF 融合 + 可选 fastembed 交叉编码重排 |
+| 缓存/事件 | Redis | 提取缓存 / **事件总线**（Agent 事件流持久化 + 断线续读） |
 | 数据库 | MySQL 8 + SQLAlchemy | 任务状态、聊天记录、Agent 运行与抓取内容 |
-| 向量存储 | FAISS (本地) | 语义检索向量索引 |
 
 ## 环境要求
 
 - Node.js 18+
 - Python 3.11+
-- Redis 7+（默认端口 **6379**，需自行启动）
-- MySQL 8+（默认端口 **3306**，需自行启动）
+- Redis **5.0+**（默认端口 **6379**；事件总线的 Stream 需要 5.0+，3.x 老版会自动降级为纯内存模式并打警告）
+- MySQL 8+（默认端口 **3306**）
+- Ollama（**可选**，辅助模型；默认 `qwen3:8b`，未安装则相关后台任务自动回退主模型）
 
-> 无需 Qdrant、Ollama、Docker。
+> 无需 Qdrant、Docker。
 >
 > MySQL 未启动时服务仍能启动，但爬取结果与问答历史无法持久化，`GET /api/monitor/stats` 会返回 `degraded: true`。
 
@@ -135,9 +137,13 @@ Nexus Intelligence Agent/
 | GET | /api/crawl/{task_id}/progress | SSE 单任务进度推送 |
 | GET | /api/crawl/results | 获取爬取结果列表（此前被 `/{task_id}` 路由遮蔽恒 404，现已修复） |
 | DELETE | /api/crawl/{task_id} | 删除任务（按任务归属精确清理数据与向量索引，返回 `deleted_data` 数量） |
-| POST | /api/query | 语义问答 |
+| POST | /api/query | 语义问答（非流式，兼容保留） |
+| POST | /api/query/stream | **流式问答**（SSE：sources → delta* → done，混合检索） |
 | GET | /api/query/history | 获取问答历史 |
 | DELETE | /api/query/history | 清空聊天记录 |
+| GET | /api/agent/{run_id}/events | **历史运行回放**（事件列表，内存优先 / Redis Stream 兜底） |
+| GET | /api/monitor/timeseries?days=N | **按天聚合时间序列**（任务量/成功率/LLM 耗时，近 N 天） |
+| POST | /api/admin/reindex | **全量重建向量索引 + BM25 索引**（升级索引格式/换模型后用） |
 | GET | /api/data | 分页浏览爬取数据（**不含** `raw_html`） |
 | GET | /api/data/{data_id} | 单个爬取数据的完整文档（**含** `raw_html`） |
 | GET | /api/monitor/stats | 任务统计指标 |
@@ -240,7 +246,29 @@ copy .env.example .env
 ```env
 LLM_PROVIDER=deepseek
 DEEPSEEK_API_KEY=your-deepseek-api-key
-MYSQL_URL=mysql+pymysql://nia:nia@localhost:3306/nia?charset=utf8mb4
+MYSQL_URL=mysql+pymysql://root:你的密码@localhost:3306/nia?charset=utf8mb4
+
+# HF 镜像（国内网络必加，fastembed 模型下载）
+HF_ENDPOINT=https://hf-mirror.com
+
+# ── v3 新增（都有默认值，可不配）─────────────────────────
+# 辅助模型：本地 Ollama 承担压缩摘要/查询改写（留空禁用）
+AUX_LLM_PROVIDER=ollama
+AUX_LLM_MODEL=qwen3:8b
+AUX_LLM_BASE_URL=http://localhost:11434
+# 混合检索开关与融合参数
+RAG_HYBRID=true
+RAG_RRF_K=60
+RAG_CANDIDATE_K=20
+RAG_THRESHOLD=0.3
+# 查询改写（走辅助模型）
+RAG_QUERY_REWRITE=true
+# 交叉编码重排（默认关；开启需下载 BAAI/bge-reranker-base 约 1GB，走 HF 镜像）
+# RERANK_MODEL=BAAI/bge-reranker-base
+# HTML 磁盘缓存 TTL 秒（0 禁用，默认 24h）
+CRAWL_HTML_CACHE_TTL=86400
+# Agent 上下文压缩阈值（估算 token）
+AGENT_CONTEXT_TOKEN_BUDGET=24000
 ```
 
 本地运行前需先在 MySQL 中创建 `nia` 数据库和对应用户；启动时应用会自动创建业务表。
@@ -287,6 +315,52 @@ API_AUTH_TOKEN=your-random-token
 本项目**不使用 Docker**，全部本地直接运行（见《运行步骤.md》）。如需生产部署：前端 `npm run build` 后把 `frontend/dist` 作为静态站点托管，并设置后端 `STATIC_DIR` 指向该目录即可由 FastAPI 同端口托管 SPA；公网部署务必设置 `API_AUTH_TOKEN`。
 
 ## 更新日志
+
+### 2026-10-25 — v3.0 大改版（Agent 内核 / 混合检索 / 前端 2026 化）
+
+**Agent 内核（backend/nia/agent/）**
+
+- **上下文工程**：新增 `context.py` —— 工具结果按字段结构化截断（替代裸字符切片）；历史估算 token 超 `AGENT_CONTEXT_TOKEN_BUDGET`（默认 24k）时把最旧步骤组**滚动压缩**为摘要（assistant.tool_calls 与 tool 消息成组替换，消息序列始终合法），前端收到 `compaction` 事件
+- **工具注册表**：`tools.py` 重构为 `@tool_spec` + Pydantic 参数模型 **自动生成 OpenAI tools schema**（消除手写 schema 漂移）；同响应多个工具调用 `dispatch_many` **并行执行**
+- **类型化事件**：`events.py` 改 StrEnum + Pydantic，事件带全局 `seq`，SSE 帧携带 `id:` 行
+- **领域记忆**：新增 `memory.py` —— Redis 记录同站点历史运行经验（状态/发现数/有效入口，TTL 7 天），下次运行注入 system prompt
+- **模型路由**：`llm_client.py` 支持辅助模型（默认本地 Ollama `qwen3:8b`，健康探测 60s 缓存，失败自动回退）；Ollama 走原生 `/api/chat` + `think:false`（qwen3 思考模式只能在原生端点关闭）
+- 进度事件携带累计 token 与上下文估算；usage 随 run 落库
+
+**事件总线（backend/nia/api/agent.py）**
+
+- Agent 事件同步写入 **Redis Stream**（MAXLEN 5000 + 24h TTL）；SSE 支持 **Last-Event-ID 断线续读**；新增 `GET /api/agent/{run_id}/events` **历史回放**；Redis 3.x（无 Stream）自动降级纯内存并打警告
+- 新增 `POST /api/admin/reindex` 全量重建向量 + BM25 索引（shield 保护，断连不中断）
+
+**爬取引擎（backend/nia/crawler/）**
+
+- **trafilatura 正文密度提取**（`parser.py`，失败回退 lxml）：导航/页脚噪声不再进入 LLM/RAG；新增 JSON-LD / OpenGraph / meta 元数据提取与**锚文本**（`PageContent.anchors`）
+- **流水线化**（`engine.py`）：批间 LLM 提取与抓取重叠执行（异步任务投递，结束统一 gather）；事件新增 `from_cache`
+- **HTML 磁盘缓存**：新增 `html_cache.py`（TTL 24h、单文件 5MB 上限、数量上限清理），重复任务零网络请求
+- **frontier 相关性打分**：`goal_keywords` 命中锚文本/URL 的链接大幅加权
+
+**RAG（backend/nia/rag/）**
+
+- **混合检索**：新增 `bm25.py`（jieba + **BM25Plus**——BM25Okapi 小语料 IDF 为负的坑）与向量双路召回，**RRF 融合**（`RAG_RRF_K`）
+- **查询改写**：辅助模型（Ollama）生成 2 个检索变体并集召回，不可用静默跳过
+- **可选重排**：新增 `reranker.py`（fastembed TextCrossEncoder，`RERANK_MODEL` 默认关）
+- **`RAG_THRESHOLD` 真正生效**（旧版为死配置）：低分块不进上下文；BM25 top-5 命中豁免
+- **FAISS 升级 IndexIDMap2**：删除从「全量 reconstruct 重建索引」变 `remove_ids` O(1)；旧格式索引自动丢弃（用 reindex 重建）；`RAGEngine` 新增 `aquery_stream` 流式问答与 `remove_data`
+- `POST /api/query/stream` 流式问答端点；删除爬取数据同步清理 BM25
+
+**前端（frontend/）**
+
+- **技术栈**：React 18→**19**（StrictMode 回归）、Vite 6→**8**（Rolldown，manualChunks 函数形式）、Tailwind 3→**4**（`@theme` CSS-first，删除 tailwind.config.js / postcss.config.js）、ECharts 5→**6**（`echarts/core` 按需）；**主包 1.49MB → 237KB（-84%）**，echarts 独立分包 + 路由 lazy
+- **Agent 控制台重构**（`features/agent/`）：`useAgentRun` 状态机 + **react-virtual 虚拟化时间线**（不再 slice(-250)）+ 预算四仪表（页面/步数/token/上下文，含压缩徽标）+ 结构化发现卡片 + Markdown 报告 + **历史运行一键回放**；AgentEvent 类型改判别式联合
+- **流式问答页**：消费 `/api/query/stream`（fetch + ReadableStream 手工解析 SSE），来源 chips 先行、逐字渲染、停止/重新生成；历史走 TanStack Query
+- **监控页重写**：TanStack Query refetchInterval 替代手写 setInterval；新增 `/api/monitor/timeseries` 14 天任务量/成功率双轴图；`<Chart>` 统一封装（echarts/core + CSS token 取色随主题变色）
+- **全局**：**Ctrl+K 命令面板**（导航/搜索/键盘操作）；品牌靛蓝强调色 + 顶部光晕精修；时区显示修复（UTC 无标记补 Z）
+- 删除死代码：framer-motion 依赖、`components/Toast.tsx`
+
+**其它**
+
+- `requirements.txt`：新增 trafilatura / jieba / rank-bm25 / aiomysql / alembic / pydantic-settings；lxml 锁定 `>=5.3,<6`（crawl4ai 兼容）
+- `database.py` `list()` 新增 `columns` 参数（轻量读取，BM25 构建用）
 
 ### 2026-10-15 — 移除 Docker 与缺陷修复
 
