@@ -1,46 +1,27 @@
 /**
  * 自主爬取 Agent 控制台 —— 给定目标与种子，实时观看 Agent 思考/动作/发现，最终生成报告。
+ *
+ * v3 重构：页面拆分为 features/agent/ 模块
+ * - useAgentRun：运行状态机（SSE 消费 / 取消 / 历史回放）
+ * - Timeline：虚拟化时间线（不再 slice(-250) 截断 DOM）
+ * - BudgetPanel：页面/步数/token/上下文四仪表
+ * - FindingsPanel：结构化发现卡片
+ * - ReportView：Markdown 报告 + 复制
+ * - RunHistory：历史运行一键回放（v3 事件总线）
  */
 
-import { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
-import { toast } from "sonner";
-import {
-  Bot,
-  Brain,
-  Wrench,
-  Eye,
-  Lightbulb,
-  Play,
-  Square,
-  Link2,
-  FileText,
-  Target,
-  Copy,
-  Check,
-  AlertCircle,
-} from "lucide-react";
-import { api } from "@/api/client";
-import type { AgentEvent, AgentFinding } from "@/types";
+import { useState } from "react";
+import { Bot, History, Lightbulb, Link2, Play, Square, Target } from "lucide-react";
+import type { AgentStartParams } from "@/api/client";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input, Textarea } from "@/components/ui/Input";
-import { Badge } from "@/components/ui/Badge";
-import { EmptyState } from "@/components/ui/EmptyState";
-import { cn } from "@/lib/utils";
-
-interface TimelineItem extends AgentEvent {
-  _id: number;
-}
-
-interface Progress {
-  pages_used: number;
-  budget_pages: number;
-  steps_used: number;
-  budget_steps: number;
-  findings: number;
-  visited: number;
-}
+import { BudgetPanel } from "@/features/agent/BudgetPanel";
+import { FindingsPanel } from "@/features/agent/FindingsPanel";
+import { ReportView } from "@/features/agent/ReportView";
+import { RunHistory } from "@/features/agent/RunHistory";
+import { Timeline } from "@/features/agent/Timeline";
+import { useAgentRun } from "@/features/agent/useAgentRun";
 
 const EXAMPLES = [
   "收集 Anthropic 官网近期发布的产品与公告，整理成要点",
@@ -54,127 +35,28 @@ export default function AgentPage() {
   const [maxPages, setMaxPages] = useState(20);
   const [maxDepth, setMaxDepth] = useState(2);
   const [useJs, setUseJs] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
 
-  const [running, setRunning] = useState(false);
-  const [starting, setStarting] = useState(false);
-  const [runId, setRunId] = useState<string | null>(null);
-  const [timeline, setTimeline] = useState<TimelineItem[]>([]);
-  const [findings, setFindings] = useState<AgentFinding[]>([]);
-  const [progress, setProgress] = useState<Progress | null>(null);
-  const [report, setReport] = useState("");
-  const [finishReason, setFinishReason] = useState("");
-  const [copied, setCopied] = useState(false);
-
-  const idRef = useRef(0);
-  const cleanupRef = useRef<(() => void) | null>(null);
-
-  // 卸载时关闭 SSE，避免 EventSource 泄漏
-  useEffect(() => () => cleanupRef.current?.(), []);
-
-  const push = (e: AgentEvent) =>
-    setTimeline((t) => [...t, { ...e, _id: idRef.current++ }].slice(-250));
-
-  const handleEvent = (e: AgentEvent) => {
-    switch (e.type) {
-      case "progress":
-        setProgress({
-          pages_used: e.pages_used ?? 0,
-          budget_pages: e.budget_pages ?? 0,
-          steps_used: e.steps_used ?? 0,
-          budget_steps: e.budget_steps ?? 0,
-          findings: typeof e.findings === "number" ? e.findings : 0,
-          visited: e.visited ?? 0,
-        });
-        break;
-      case "finding":
-        setFindings((f) => [...f, { title: e.title, url: e.url, data: e.data, content: e.content }]);
-        push(e);
-        break;
-      case "finish":
-        setReport(e.report ?? "");
-        setFinishReason(e.reason ?? "");
-        // finish 事件携带完整发现列表，用它兜底补齐（事件丢失时侧栏不会残缺）
-        if (Array.isArray(e.findings) && e.findings.length > 0) {
-          setFindings(e.findings);
-        }
-        setRunning(false);
-        push(e);
-        toast.success("Agent 任务完成", { description: e.reason });
-        break;
-      case "error":
-        push(e);
-        setRunning(false);
-        toast.error("Agent 出错", { description: e.message });
-        break;
-      default:
-        push(e);
-    }
-  };
+  const { snapshot, start, cancel, loadReplay } = useAgentRun();
+  const running = snapshot.status === "running" || snapshot.status === "starting";
+  const busy = snapshot.status === "starting";
 
   const handleStart = async () => {
     const seedList = seeds
       .split("\n")
       .map((s) => s.trim())
       .filter(Boolean);
-    if (!goal.trim()) return toast.error("请填写目标");
-    if (seedList.length === 0) return toast.error("请至少填写一个种子 URL");
-    if (!Number.isFinite(maxPages) || maxPages < 1 || maxPages > 200)
-      return toast.error("最大页数需要在 1–200 之间");
-    if (!Number.isFinite(maxDepth) || maxDepth < 0 || maxDepth > 5)
-      return toast.error("跟随深度需要在 0–5 之间");
-
-    setTimeline([]);
-    setFindings([]);
-    setReport("");
-    setProgress(null);
-    setFinishReason("");
-    idRef.current = 0;
-    setStarting(true);
-
-    try {
-      const { run_id } = await api.startAgent({
-        goal: goal.trim(),
-        seeds: seedList,
-        max_pages: maxPages,
-        max_depth: maxDepth,
-        use_js: useJs,
-      });
-      setRunId(run_id);
-      setRunning(true);
-      cleanupRef.current = api.subscribeAgent(
-        run_id,
-        handleEvent,
-        () => setRunning(false),
-        (err) => {
-          setRunning(false);
-          toast.error(err);
-        },
-      );
-    } catch (e) {
-      toast.error("启动失败", { description: e instanceof Error ? e.message : String(e) });
-    } finally {
-      setStarting(false);
-    }
+    if (!goal.trim()) return;
+    if (seedList.length === 0) return;
+    const params: AgentStartParams = {
+      goal: goal.trim(),
+      seeds: seedList,
+      max_pages: maxPages,
+      max_depth: maxDepth,
+      use_js: useJs,
+    };
+    await start(params);
   };
-
-  const handleCancel = async () => {
-    if (!runId) return;
-    try {
-      await api.cancelAgent(runId);
-      toast("已请求取消，Agent 正在收尾…");
-    } catch {
-      /* ignore */
-    }
-  };
-
-  const copyReport = () => {
-    navigator.clipboard.writeText(report);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 1500);
-  };
-
-  const pagePct = progress && progress.budget_pages ? (progress.pages_used / progress.budget_pages) * 100 : 0;
-  const stepPct = progress && progress.budget_steps ? (progress.steps_used / progress.budget_steps) * 100 : 0;
 
   return (
     <div className="mx-auto max-w-7xl p-4 lg:p-6">
@@ -183,13 +65,39 @@ export default function AgentPage() {
         <div className="flex h-11 w-11 items-center justify-center rounded-xl bg-primary shadow-sm">
           <Bot className="h-6 w-6 text-primary-foreground" />
         </div>
-        <div>
+        <div className="min-w-0 flex-1">
           <h1 className="text-xl font-bold text-foreground">自主爬取 Agent</h1>
           <p className="text-sm text-muted-foreground">
             给一个目标和起点，Agent 自主规划、跟随链接、提取并汇总成报告
           </p>
         </div>
+        <Button variant="outline" size="sm" onClick={() => setHistoryOpen((v) => !v)}>
+          <History className="h-4 w-4" />
+          历史运行
+        </Button>
       </div>
+
+      {/* 历史运行（回放入口） */}
+      {historyOpen && (
+        <div className="mb-6">
+          <RunHistory
+            open={historyOpen}
+            onClose={() => setHistoryOpen(false)}
+            onReplay={(runId) => loadReplay(runId)}
+            activeRunId={snapshot.runId}
+          />
+        </div>
+      )}
+
+      {/* 回放提示条 */}
+      {snapshot.replaying && (
+        <div className="mb-4 flex items-center justify-between rounded-lg border border-blue-500/30 bg-blue-500/10 px-4 py-2 text-sm text-blue-600 dark:text-blue-400">
+          <span>正在回放历史运行 {snapshot.runId?.slice(0, 8)}…（事件来自 Redis 事件总线）</span>
+          <button onClick={() => window.location.reload()} className="text-xs underline underline-offset-2">
+            退出回放
+          </button>
+        </div>
+      )}
 
       {/* 配置表单 */}
       <Card className="mb-6 p-5">
@@ -269,11 +177,11 @@ export default function AgentPage() {
           </label>
           <div className="ml-auto flex gap-2">
             {running ? (
-              <Button variant="destructive" size="lg" onClick={handleCancel}>
+              <Button variant="destructive" size="lg" onClick={cancel} disabled={snapshot.status === "starting"}>
                 <Square className="h-4 w-4" /> 取消
               </Button>
             ) : (
-              <Button size="lg" onClick={handleStart} loading={starting}>
+              <Button size="lg" onClick={handleStart} loading={busy}>
                 <Play className="h-4 w-4" /> 启动 Agent
               </Button>
             )}
@@ -281,231 +189,51 @@ export default function AgentPage() {
         </div>
       </Card>
 
-      {/* 进度条 */}
-      {progress && (
-        <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
-          <StatBar label="页面预算" value={`${progress.pages_used}/${progress.budget_pages}`} pct={pagePct} />
-          <StatBar label="步数预算" value={`${progress.steps_used}/${progress.budget_steps}`} pct={stepPct} />
-          <StatTile label="已访问页面" value={progress.visited} />
-          <StatTile label="发现条数" value={progress.findings} />
+      {/* 预算仪表盘 */}
+      {(snapshot.progress || snapshot.usage) && (
+        <div className="mb-6">
+          <BudgetPanel
+            progress={snapshot.progress}
+            usage={snapshot.usage}
+            estTokens={snapshot.estTokens}
+            compactions={snapshot.compactions}
+            compactionSaved={snapshot.compactionSaved}
+          />
         </div>
       )}
 
-      {/* 主区：时间线 + 侧栏 */}
+      {/* 主区：时间线 + 发现侧栏 */}
       <div className="grid gap-6 lg:grid-cols-3">
-        {/* 事件时间线 */}
-        <div className="lg:col-span-2">
+        <div className="flex min-w-0 flex-col lg:col-span-2">
           <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Brain className="h-4 w-4" /> 实时活动
+            实时活动
             {running && <span className="h-2 w-2 animate-pulse rounded-full bg-success" />}
           </h2>
-          <Card className="max-h-[600px] min-h-[300px] overflow-auto p-4">
-            {timeline.length === 0 ? (
-              <EmptyState
-                icon={Bot}
-                title="Agent 待命中"
-                description="填写目标与种子 URL，点击「启动 Agent」开始自主探索。"
-              />
-            ) : (
-              <div className="space-y-2">
-                {timeline.map((item) => (
-                  <TimelineRow key={item._id} item={item} />
-                ))}
-              </div>
-            )}
+          <Card className="p-1">
+            <Timeline
+              events={snapshot.timeline}
+              running={running}
+              className="h-[560px] px-3 py-2"
+            />
           </Card>
         </div>
 
-        {/* 发现侧栏 */}
-        <div>
+        <div className="flex min-w-0 flex-col">
           <h2 className="mb-3 flex items-center gap-2 text-sm font-semibold text-foreground">
-            <Lightbulb className="h-4 w-4" /> 发现（{findings.length}）
+            <Lightbulb className="h-4 w-4" /> 发现（{snapshot.findings.length}）
           </h2>
-          <Card className="max-h-[600px] min-h-[300px] overflow-auto p-3">
-            {findings.length === 0 ? (
-              <p className="px-2 py-8 text-center text-sm text-muted-foreground">尚无发现</p>
-            ) : (
-              <div className="space-y-2">
-                {findings.map((f, i) => (
-                  <div key={`${f.url ?? ""}-${i}`} className="rounded-lg border border-border bg-background/50 p-3">
-                    <div className="mb-1 text-sm font-medium text-foreground">
-                      {f.title || "（无标题）"}
-                    </div>
-                    {f.url && (
-                      <a
-                        href={f.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="line-clamp-1 text-xs text-primary hover:underline"
-                      >
-                        {f.url}
-                      </a>
-                    )}
-                    {f.content && (
-                      <p className="mt-1 line-clamp-3 text-xs text-muted-foreground">{f.content}</p>
-                    )}
-                    {f.data && Object.keys(f.data).length > 0 && (
-                      <pre className="mt-1.5 max-h-28 overflow-auto rounded bg-secondary p-2 text-[11px] text-muted-foreground">
-                        {JSON.stringify(f.data, null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                ))}
-              </div>
-            )}
+          <Card className="h-[560px] overflow-hidden p-3">
+            <FindingsPanel findings={snapshot.findings} />
           </Card>
         </div>
       </div>
 
       {/* 最终报告 */}
-      {report && (
-        <Card className="mt-6 p-6">
-          <div className="mb-4 flex items-center justify-between">
-            <h2 className="flex items-center gap-2 text-base font-semibold text-foreground">
-              <FileText className="h-5 w-5" /> 情报报告
-              {finishReason && <Badge variant="secondary">{finishReason}</Badge>}
-            </h2>
-            <Button variant="outline" size="sm" onClick={copyReport}>
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-              {copied ? "已复制" : "复制"}
-            </Button>
-          </div>
-          <div className="markdown">
-            <ReactMarkdown>{report}</ReactMarkdown>
-          </div>
-        </Card>
+      {snapshot.report && (
+        <div className="mt-6">
+          <ReportView report={snapshot.report} reason={snapshot.finishReason} />
+        </div>
       )}
     </div>
-  );
-}
-
-// ── 时间线单行 ───────────────────────────────────────────────────
-
-function TimelineRow({ item }: { item: TimelineItem }) {
-  const meta = rowMeta(item);
-  return (
-    <div className={cn("flex animate-fade-in gap-3 rounded-lg border p-3", meta.box)}>
-      <div className={cn("mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-lg", meta.iconBg)}>
-        <meta.Icon className="h-4 w-4" />
-      </div>
-      <div className="min-w-0 flex-1">
-        <div className="mb-0.5 text-xs font-medium text-muted-foreground">{meta.label}</div>
-        <div className="text-sm text-foreground">{meta.body}</div>
-      </div>
-    </div>
-  );
-}
-
-function rowMeta(item: TimelineItem) {
-  switch (item.type) {
-    case "start":
-      return {
-        Icon: Target,
-        label: "开始",
-        iconBg: "bg-accent text-accent-foreground",
-        box: "border-border bg-background/40",
-        body: <span className="text-muted-foreground">{item.goal}</span>,
-      };
-    case "thought":
-      return {
-        Icon: Brain,
-        label: "思考",
-        iconBg: "bg-accent text-accent-foreground",
-        box: "border-border bg-background/40",
-        body: <span className="italic text-foreground/90">{item.text}</span>,
-      };
-    case "action":
-      return {
-        Icon: Wrench,
-        label: "动作",
-        iconBg: "bg-primary/15 text-primary",
-        box: "border-primary/20 bg-primary/5",
-        body: (
-          <span>
-            <code className="rounded bg-secondary px-1.5 py-0.5 font-mono text-xs">{item.tool}</code>
-            <span className="ml-2 text-xs text-muted-foreground">{summarizeArgs(item.args)}</span>
-          </span>
-        ),
-      };
-    case "observation":
-      return {
-        Icon: Eye,
-        label: "观察",
-        iconBg: "bg-secondary text-muted-foreground",
-        box: "border-border bg-background/40",
-        body: <span className="text-xs text-muted-foreground">{summarizeArgs(item.result)}</span>,
-      };
-    case "finding":
-      return {
-        Icon: Lightbulb,
-        label: "发现",
-        iconBg: "bg-success/15 text-success",
-        box: "border-success/30 bg-success/5",
-        body: <span className="font-medium text-foreground">{item.title || item.url}</span>,
-      };
-    case "finish":
-      return {
-        Icon: Check,
-        label: "完成",
-        iconBg: "bg-success/15 text-success",
-        box: "border-success/30 bg-success/5",
-        body: <span className="text-muted-foreground">{item.reason}</span>,
-      };
-    case "error":
-      return {
-        Icon: AlertCircle,
-        label: "错误",
-        iconBg: "bg-destructive/15 text-destructive",
-        box: "border-destructive/30 bg-destructive/5",
-        body: <span className="text-destructive">{item.message}</span>,
-      };
-    default:
-      return {
-        Icon: Eye,
-        label: item.type,
-        iconBg: "bg-secondary text-muted-foreground",
-        box: "border-border",
-        body: null,
-      };
-  }
-}
-
-function summarizeArgs(obj?: Record<string, unknown>): string {
-  if (!obj) return "";
-  const parts: string[] = [];
-  for (const [k, v] of Object.entries(obj)) {
-    if (k === "ok") continue;
-    let val = typeof v === "string" ? v : JSON.stringify(v);
-    if (val && val.length > 70) val = val.slice(0, 70) + "…";
-    parts.push(`${k}: ${val}`);
-  }
-  return parts.join("  ·  ");
-}
-
-// ── 进度小组件 ───────────────────────────────────────────────────
-
-function StatBar({ label, value, pct }: { label: string; value: string; pct: number }) {
-  return (
-    <Card className="p-3">
-      <div className="mb-1.5 flex items-center justify-between">
-        <span className="text-xs text-muted-foreground">{label}</span>
-        <span className="text-xs font-medium text-foreground">{value}</span>
-      </div>
-      <div className="h-1.5 overflow-hidden rounded-full bg-secondary">
-        <div
-          className="h-full rounded-full bg-primary transition-all duration-500"
-          style={{ width: `${Math.min(pct, 100)}%` }}
-        />
-      </div>
-    </Card>
-  );
-}
-
-function StatTile({ label, value }: { label: string; value: number }) {
-  return (
-    <Card className="p-3">
-      <div className="text-xs text-muted-foreground">{label}</div>
-      <div className="mt-1 text-2xl font-bold text-foreground">{value}</div>
-    </Card>
   );
 }
