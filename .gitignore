@@ -65,3 +65,6 @@ backend/nia/_data/
 # WorkBuddy 会话数据
 .workbuddy/
 .claude/
+
+# ZCode 本地会话配置
+.zcode/
