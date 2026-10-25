@@ -4,19 +4,31 @@ uvicorn>=0.27.0,<1.0
 
 # ── 爬取 ──
 httpx>=0.27.0,<1.0       # 异步抓取 + LLM 调用（同步路径也统一用它）
-lxml>=5.0.0,<7.0
+lxml>=5.3.0,<6.0         # crawl4ai 要求 ~=5.3，不要升到 6.x
 cssselect>=1.2.0         # lxml .cssselect() 依赖（原由 scrapy 间接提供）
 crawl4ai>=0.3.0          # 可选：JS 渲染（需要 playwright install chromium）
+trafilatura>=2.0         # v3：正文密度提取（lxml 兼容 5.3）
 
 # ── Embedding / 向量 ──
 fastembed>=0.3.0         # 本地 ONNX embedding（默认，无需 Ollama/torch）
 faiss-cpu>=1.7.0
 numpy>=1.25.0,<3.0
 
+# ── RAG 混合检索（v3）──
+jieba>=0.42              # 中文分词
+rank-bm25>=0.2           # BM25 关键词检索
+
 # ── 基础设施 ──
 redis>=5.0.0
 SQLAlchemy>=2.0.0,<3.0
 PyMySQL>=1.1.0
+aiomysql>=0.2            # v3：异步 MySQL 驱动（纯 Python）
+alembic>=1.13            # v3：数据库迁移
+
+# ── 配置 ──
+python-dotenv>=1.0.0
+pydantic>=2.0.0,<3.0
+pydantic-settings>=2.0   # v3：类型化配置（Phase 4 启用）
 
 # ── 可选：远程 embedding 后端 ──
 # EMBED_PROVIDER=openai 时需要；EMBED_PROVIDER=fastembed（默认）无需安装任何 langchain
@@ -24,5 +36,3 @@ langchain-openai>=0.1.0
 
 # ── 其它 ──
 ddddocr>=1.5.0           # 验证码识别（自带 Pillow 依赖）
-python-dotenv>=1.0.0
-pydantic>=2.0.0,<3.0
