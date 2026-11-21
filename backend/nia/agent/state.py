@@ -46,14 +46,18 @@ class AgentState:
         self.cancel_flag.set()
 
     @staticmethod
-    def _finding_key(finding: dict) -> tuple[str, str, str]:
+    def _finding_key(finding: dict) -> tuple[str, ...]:
         """去重键。
 
-        旧实现只用 (url, title)，于是两条标题/URL 都为空的 record_finding
-        会被静默丢掉；这里在二者皆空时退化为内容摘要哈希。
+        有 url/title 时按 (url, title) 聚合 —— 同一来源的多次提取按
+        「更丰富覆盖」合并（旧版把内容哈希掺进键里，导致不同内容的同源
+        发现永远不合并、覆盖分支不可达）；二者皆空时退化为内容哈希，
+        避免 record_finding 被静默丢弃。
         """
         url = (finding.get("url") or "").strip()
         title = (finding.get("title") or "").strip()
+        if url or title:
+            return (url, title)
         content = (finding.get("content") or "").strip()
         if not content and finding.get("data") is not None:
             try:
@@ -61,12 +65,12 @@ class AgentState:
             except (TypeError, ValueError):
                 content = str(finding["data"])
         digest = hashlib.sha1(content.encode("utf-8", "ignore")).hexdigest()[:16] if content else ""
-        return (url, title, digest)
+        return ("", "", digest)
 
     def add_finding(self, finding: dict) -> bool:
         """去重添加 finding。返回是否为新发现。
 
-        同一 (url, title) 会合并：新内容更丰富时覆盖旧条目。
+        同键发现合并：新内容更丰富时覆盖旧条目，否则视为已见。
         """
         key = self._finding_key(finding)
         for i, f in enumerate(self.findings):

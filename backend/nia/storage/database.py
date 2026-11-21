@@ -48,9 +48,10 @@ _TABLES: dict[str, Table] = {
     "task_logs": _table("task_logs", Column("id", String(64), primary_key=True), Column("url", Text), Column("spider_name", String(255)), Column("domain", String(512)), Column("status", String(32)), Column("llm_calls", Integer), Column("llm_time_ms", Integer), Column("crawl_time_ms", Integer), Column("error_type", String(255)), Column("error_message", Text), Column("created_at", DateTime, index=True)),
     "vector_data": _table("vector_data", Column("id", String(64), primary_key=True), Column("crawled_data_id", String(64), index=True), Column("chunk_index", Integer), Column("created_at", DateTime)),
     "data_versions": _table("data_versions", Column("id", String(64), primary_key=True), Column("crawled_data_id", String(64), index=True), Column("field_name", String(255)), Column("old_value", Text), Column("new_value", Text), Column("version_number", Integer), Column("created_at", DateTime)),
+    "crawl_schedules": _table("crawl_schedules", Column("id", String(64), primary_key=True), Column("name", String(255)), Column("seeds", JSON), Column("instruction", Text), Column("interval_minutes", Integer), Column("max_depth", Integer), Column("max_pages", Integer), Column("same_domain_only", Boolean), Column("use_js", Boolean), Column("enabled", Boolean, index=True), Column("last_run_at", DateTime), Column("next_run_at", DateTime, index=True), Column("last_status", String(32)), Column("created_at", DateTime, index=True)),
 }
 
-_KEYS = {"websites": "id", "extraction_rules": "id", "crawled_data": "id", "crawl_tasks": "task_id", "chat_history": "id", "agent_runs": "run_id", "task_logs": "id", "vector_data": "id", "data_versions": "id"}
+_KEYS = {"websites": "id", "extraction_rules": "id", "crawled_data": "id", "crawl_tasks": "task_id", "chat_history": "id", "agent_runs": "run_id", "task_logs": "id", "vector_data": "id", "data_versions": "id", "crawl_schedules": "id"}
 Index("ix_crawled_data_url_prefix", _TABLES["crawled_data"].c.url, mysql_length=191)
 
 

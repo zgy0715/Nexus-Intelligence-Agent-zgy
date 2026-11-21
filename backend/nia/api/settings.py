@@ -74,6 +74,10 @@ async def get_config():
             "CRAWL_MAX_PAGES": Config.CRAWL_MAX_PAGES,
             "CRAWL_CONCURRENCY": Config.CRAWL_CONCURRENCY,
             "MAX_CONCURRENT_CRAWLS": Config.MAX_CONCURRENT_CRAWLS,
+            # Agent 参数组（前端预算仪表的上下文预算从此读取，不再硬编码）
+            "AGENT_MAX_PAGES": Config.AGENT_MAX_PAGES,
+            "AGENT_MAX_STEPS": Config.AGENT_MAX_STEPS,
+            "AGENT_CONTEXT_TOKEN_BUDGET": Config.AGENT_CONTEXT_TOKEN_BUDGET,
             "API_AUTH_ENABLED": bool((Config.API_AUTH_TOKEN or "").strip()),
         }
     }

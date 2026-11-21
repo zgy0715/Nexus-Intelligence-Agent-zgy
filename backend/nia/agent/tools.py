@@ -4,9 +4,9 @@ v3 变更（对比旧版）：
 - 旧版 TOOLS schema 与工具实现分开手写，改参数名/加字段时两处漂移只能靠人肉同步；
   现在用 `@tool_spec` 装饰器把 Pydantic 参数模型绑定到实现方法上，
   OpenAI tools schema 由 `model_json_schema()` 自动生成 —— 单一事实来源。
-- 新增 `dispatch_many`：同一响应里的多个工具调用并发执行
-  （预算语义与旧版 crawl_links 的并发 gather 一致：检查→登记存在竞态窗口，
-  过冲上界 = 单批大小，与旧实现同级）。
+- 新增 `dispatch_many`：同一响应里的多个工具调用并发执行。
+  预算语义：`_get_page` 在 await 之前同步落账（visited + pages_used），
+  事件循环单线程内即原子操作 —— 并行工具不会越过页面预算。
 - 保留全部防御性参数清洗（_as_text/_as_url_list）：Pydantic 校验失败时
   退回原始 dict，由 handler 内的清洗函数兜底 —— LLM 的畸形输入永远不可信。
 """
@@ -142,6 +142,11 @@ def _as_url_list(value) -> list[str]:
     if value is None:
         return []
     if isinstance(value, str):
+        value = value.strip()
+        # 整串 "[url1, url2]" 的 JSON 容错必须在外层先剥壳：先按逗号/空格
+        # split 会把 "[http://a.com" 拆成两半，只有后半段能存活
+        if value.startswith("[") and value.endswith("]"):
+            value = value[1:-1]
         raw = [p for p in value.replace(",", " ").split() if p]
     elif isinstance(value, (list, tuple, set)):
         raw = [_as_text(v, 2000) for v in value]
@@ -183,13 +188,15 @@ class ToolExecutor:
         # v3.2：页面落库回调（成功抓取并解析后触发，接 crawled_data + RAG 索引管道）
         self.on_page = on_page
         self._pages: dict[str, PageContent] = {}  # 归一化 url -> 已抓取页面
+        # 当前探索上下文页：crawl_links 的 URL 来自该页，作为爬取路径图的父边
+        self._context_url: str = ""
 
     # ── 内部：抓取+解析（带缓存与预算登记） ──────────────────────
 
     def _cancelled(self) -> bool:
         return self.state.cancel_flag.is_set()
 
-    async def _get_page(self, url: str) -> PageContent | None:
+    async def _get_page(self, url: str, parent_url: str = "") -> PageContent | None:
         norm = normalize_url(url)
         if not norm:
             return None
@@ -198,15 +205,16 @@ class ToolExecutor:
         # 命中缓存不计预算；真正发起请求前才检查预算
         if not self.state.budget_left() or self._cancelled():
             return None
+        # 预算落账必须在 await 之前同步完成：事件循环单线程内这是一段原子区，
+        # 并行工具（dispatch_many）在等待 fetch 时看到的是已扣减的余量 ——
+        # 彻底消除旧实现「检查→登记」窗口的过冲（上界 = 单批大小 8）。
+        self.state.visited.add(norm)
+        self.state.pages_used += 1
         try:
             fr = await self.fetcher.fetch(norm)
         except Exception as e:  # 单个 URL 失败不应中断整批
             logger.debug(f"fetch failed for {norm}: {e}")
-            self.state.visited.add(norm)
-            self.state.pages_used += 1
             return None
-        self.state.visited.add(norm)
-        self.state.pages_used += 1
         if not fr.success:
             logger.debug(f"fetch not successful for {norm}: {fr.error}")
             return None
@@ -216,6 +224,7 @@ class ToolExecutor:
             logger.warning(f"parse failed for {norm}: {e}")
             return None
         self._pages[norm] = page
+        page.parent_url = parent_url
         # v3.2：落库 + RAG 索引（回调失败只告警，不影响 Agent 运行）
         if self.on_page is not None:
             try:
@@ -245,6 +254,7 @@ class ToolExecutor:
         page = await self._get_page(_as_text(url, 2000))
         if page is None:
             return {"ok": False, "error": "抓取失败或 URL 无效", "url": url}
+        self._context_url = page.url
         summary = await self._summarize(page)
         return {
             "ok": True,
@@ -263,7 +273,7 @@ class ToolExecutor:
         fresh = [u for u in urls if (normalize_url(u) or u) not in self.state.visited]
         if not fresh:
             return {"ok": True, "pages": [], "note": "这些链接都已访问过"}
-        # 预算内再砍一刀：一次调用不能吃掉超过剩余预算的页面数
+        # 预算内先粗砍一刀（精确兜底在 _get_page 的同步落账：不会越过预算）
         remaining = max(0, self.state.budget_pages - self.state.pages_used)
         skipped = 0
         if len(fresh) > remaining:
@@ -274,8 +284,9 @@ class ToolExecutor:
                     "message": "页面预算已用尽，请立即调用 finish 汇总。"}
 
         # 并发抓取（旧实现是串行 for，与 schema 宣称的“并发抓取”不符）
+        parent = self._context_url
         pages = await asyncio.gather(
-            *(self._fetch_and_summarize(u) for u in fresh),
+            *(self._fetch_and_summarize(u, parent) for u in fresh),
             return_exceptions=True,
         )
         results = []
@@ -313,8 +324,8 @@ class ToolExecutor:
         is_new = self.state.add_finding({"url": _as_text(url, 2000), "title": title, "content": content})
         return {"ok": True, "recorded": True, "is_new": is_new}
 
-    async def _fetch_and_summarize(self, url: str) -> dict:
-        page = await self._get_page(url)
+    async def _fetch_and_summarize(self, url: str, parent_url: str = "") -> dict:
+        page = await self._get_page(url, parent_url)
         if page is None:
             return {"url": url, "ok": False}
         summary = await self._summarize(page)

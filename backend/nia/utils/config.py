@@ -142,6 +142,12 @@ class Config:
     RERANK_MODEL = os.getenv("RERANK_MODEL", "")
     # 查询改写（辅助模型生成多个检索变体）
     RAG_QUERY_REWRITE = os.getenv("RAG_QUERY_REWRITE", "true").lower() in ("1", "true", "yes", "on")
+    # 多轮问答：携带最近 N 条历史消息（user+assistant 合计）作为上下文
+    QA_HISTORY_MESSAGES = int(os.getenv("QA_HISTORY_MESSAGES", "6"))
+
+    # token 成本估算单价（元 / 百万 token），按主力模型公开价默认，可随价格调整
+    LLM_PRICE_INPUT_PER_M = float(os.getenv("LLM_PRICE_INPUT_PER_M", "2"))
+    LLM_PRICE_OUTPUT_PER_M = float(os.getenv("LLM_PRICE_OUTPUT_PER_M", "3"))
 
     # ── 监控告警 ──────────────────────────────────────────────────
     ALERT_SUCCESS_RATE = float(os.getenv("ALERT_SUCCESS_RATE", "90"))  # 低于该成功率告警

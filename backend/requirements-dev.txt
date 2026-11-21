@@ -1,0 +1,3 @@
+# 开发/CI 依赖（运行不需要；pytest 测试全部离线，不依赖 MySQL/Redis/LLM）
+-r requirements.txt
+pytest>=8.0

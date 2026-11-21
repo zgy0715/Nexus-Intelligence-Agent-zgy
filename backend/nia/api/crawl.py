@@ -142,14 +142,14 @@ def _publish_progress(task_id: str, step: str, progress: int, message: str, stat
 def _gc_tasks() -> None:
     if len(_tasks) <= _MAX_TASKS_IN_MEMORY:
         return
-    finished = [tid for tid, t in _tasks.items() if t.get("status") in ("completed", "failed")]
+    finished = [tid for tid, t in _tasks.items() if t.get("status") in ("completed", "failed", "cancelled")]
     for tid in finished[: len(_tasks) - _MAX_TASKS_IN_MEMORY]:
         _tasks.pop(tid, None)
 
 
 def _active_tasks() -> int:
     return sum(1 for t in list(_tasks.values()) + list(_batches.values())
-               if t.get("status") not in ("completed", "failed"))
+               if t.get("status") not in ("completed", "failed", "cancelled"))
 
 
 # ── 爬取核心逻辑 ─────────────────────────────────────────────────
@@ -180,6 +180,7 @@ def _sync_fetch(url: str, use_js: bool) -> str:
     with httpx.Client(
         timeout=httpx.Timeout(Config.CRAWL_REQUEST_TIMEOUT, connect=10.0),
         follow_redirects=False,
+        trust_env=False,
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"},
     ) as client:
         current = url
@@ -309,6 +310,8 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool) -> None:
         _publish_progress(task_id, "store", 85, "保存到数据库...")
         data_id = str(uuid.uuid4())
         domain = urlparse(url).netloc
+        new_hash = _content_hash(text_content)
+        changed_from = _detect_change(url, text_content, new_hash)
         try:
             _get_db().insert("crawled_data", {
                 "id": data_id,
@@ -319,8 +322,8 @@ def _do_crawl(task_id: str, url: str, instruction: str, use_js: bool) -> None:
                 "raw_html": html_content,
                 "extracted_data": extracted_data,
                 "extraction_method": extraction_method,
-                "dom_hash": "",
-                "metadata": {"task_id": task_id},
+                "dom_hash": new_hash,
+                "metadata": {"task_id": task_id, **({"changed_from": changed_from} if changed_from else {})},
                 "created_at": utcnow(),
             })
             data_stored = True
@@ -523,7 +526,6 @@ async def delete_task(task_id: str):
 
         for did in data_ids:
             db.delete("crawled_data", filters={"id": did})
-            db.delete("vector_data", filters={"crawled_data_id": did})
 
         # 同步清理向量索引与 BM25（FAISS IDMap2 remove_ids / BM25 重建）
         if data_ids:
@@ -581,14 +583,65 @@ class BatchCrawlRequest(BaseModel):
         return cleaned
 
 
-def _persist_page(page_url: str, title: str, content: str, raw_html: str = "", task_id: str = "", method: str = "batch") -> str:
+def _content_hash(content: str) -> str:
+    import hashlib
+
+    return hashlib.sha1((content or "").encode("utf-8", "ignore")).hexdigest()
+
+
+def _detect_change(page_url: str, content: str, new_hash: str) -> str:
+    """与同 URL 历史版本比对；内容变化时写 data_versions，返回旧数据 id（无变化返回空串）。"""
+    if not content:
+        return ""
+    try:
+        db = _get_db()
+        # 取同 URL 的最新版本比对（db.get 无序，可能拿到旧版本导致版本链错乱）
+        latest = db.list("crawled_data", filters={"url": page_url}, order_by="created_at", limit=1)
+        prev = latest[0] if latest else None
+        if not prev or not prev.get("dom_hash") or prev["dom_hash"] == new_hash:
+            return ""
+        versions = db.count("data_versions", filters={"crawled_data_id": prev["id"]})
+        db.insert("data_versions", {
+            "id": str(uuid.uuid4()),
+            "crawled_data_id": prev["id"],
+            "field_name": "content",
+            "old_value": (prev.get("content") or "")[:2000],
+            "new_value": content[:2000],
+            "version_number": versions + 1,
+            "created_at": utcnow(),
+        })
+        logger.info(f"site change detected: {page_url} (v{versions + 1})")
+        return prev["id"]
+    except Exception as e:
+        logger.debug(f"change detection skipped for {page_url}: {e}")
+        return ""
+
+
+def _persist_page(
+    page_url: str,
+    title: str,
+    content: str,
+    raw_html: str = "",
+    task_id: str = "",
+    method: str = "batch",
+    parent_url: str = "",
+) -> str:
     """把抓取到的页面存入 crawled_data 并建立 RAG 索引（同步，executor 中调用）。
 
     metadata.task_id 记录数据归属，删除任务时据此精确清理，避免误删
-    其它任务抓到的同 URL 数据。
-    v3.2 修复：旧版只入库不建索引，导致批量爬取的内容语义问答永远查不到。
+    其它任务抓到的同 URL 数据；parent_url 供爬取路径图谱使用。
+    同 URL 内容变化时写 data_versions（站点变更监控）。
     """
     data_id = str(uuid.uuid4())
+    new_hash = _content_hash(content)
+    changed_from = _detect_change(page_url, content, new_hash)
+    metadata: dict = {}
+    if task_id:
+        metadata["task_id"] = task_id
+    if parent_url:
+        metadata["parent_url"] = parent_url
+    if changed_from:
+        metadata["changed_from"] = changed_from
     try:
         _get_db().insert("crawled_data", {
             "id": data_id,
@@ -599,8 +652,8 @@ def _persist_page(page_url: str, title: str, content: str, raw_html: str = "", t
             "raw_html": raw_html,
             "extracted_data": {},
             "extraction_method": method,
-            "dom_hash": "",
-            "metadata": {"task_id": task_id} if task_id else {},
+            "dom_hash": new_hash,
+            "metadata": metadata,
             "created_at": utcnow(),
         })
     except Exception as e:
@@ -643,7 +696,7 @@ async def _run_batch(task_id: str, req: "BatchCrawlRequest") -> None:
     async def on_page(page):
         # 持久化放到线程池，避免阻塞事件循环
         await loop.run_in_executor(
-            None, _persist_page, page.url, page.title, page.text, "", task_id
+            None, _persist_page, page.url, page.title, page.text, "", task_id, "batch", page.parent_url
         )
 
     cfg = CrawlConfig(
@@ -670,6 +723,33 @@ async def _run_batch(task_id: str, req: "BatchCrawlRequest") -> None:
         if b is not None:
             b["status"] = status
         _batch_emit(task_id, {"event": "_eof"})
+
+        # 批量任务落 crawl_tasks：监控统计/时间序列/结果列表才有数据
+        def _persist_task():
+            events = (b or {}).get("events") or []
+            pages = sum(1 for e in events if e.get("event") == "page")
+            findings = sum(1 for e in events if e.get("event") == "finding")
+            elapsed = next(
+                (e.get("elapsed") for e in reversed(events) if e.get("event") == "done"), None
+            )
+            _get_db().upsert("crawl_tasks", {
+                "task_id": task_id,
+                "url": (req.seeds or [""])[0],
+                "instruction": req.instruction,
+                "use_js": req.use_js,
+                "status": status,
+                "progress": 100,
+                "step": "done",
+                "message": f"批量爬取：{pages} 页 / {findings} 发现",
+                "domain": urlparse((req.seeds or [""])[0]).netloc,
+                "crawl_time_ms": int(float(elapsed) * 1000) if elapsed else None,
+                "created_at": b.get("created_at") or utcnow().isoformat(),
+            })
+
+        try:
+            await asyncio.get_running_loop().run_in_executor(None, _persist_task)
+        except Exception as e:
+            logger.warning(f"persist batch task failed: {e}")
 
 
 @router.post("/batch")

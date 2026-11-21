@@ -86,10 +86,11 @@ class CrawlEngine:
                         break
 
                     # ── HTML 磁盘缓存：命中直接构造 FetchResult，未命中才联网 ──
+                    parent_of = {url: parent for url, _depth, parent in batch}
                     to_fetch: list[tuple[str, int]] = []
                     results_by_url: dict[str, FetchResult] = {}
                     if self._html_cache:
-                        for url, depth in batch:
+                        for url, depth, _parent in batch:
                             cached = self._html_cache.get(url)
                             if cached:
                                 cache_hits += 1
@@ -113,7 +114,7 @@ class CrawlEngine:
                                 self._html_cache.put(url, fr.final_url or url, fr.html)
 
                     batch_pages: list[PageContent] = []
-                    for (url, depth) in batch:
+                    for (url, depth, _parent) in batch:
                         fr = results_by_url.get(url)
                         if fr is None or not fr.success:
                             page_errors += 1
@@ -126,6 +127,7 @@ class CrawlEngine:
                             continue
 
                         page = parse_html(fr.html, fr.final_url or url)
+                        page.parent_url = parent_of.get(url, "")
 
                         # 正文去重：镜像页/分页参数变体不再重复提取与存储
                         digest = hashlib.sha1(page.text.encode("utf-8", "ignore")).hexdigest()
@@ -161,6 +163,7 @@ class CrawlEngine:
                             url=page.url,
                             title=page.title,
                             depth=depth,
+                            parent=page.parent_url,
                             links=len(page.links),
                             chars=len(page.text),
                             truncated=fr.truncated,

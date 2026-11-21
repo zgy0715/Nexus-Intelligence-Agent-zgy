@@ -40,14 +40,20 @@ class BM25Doc:
 
 @dataclass
 class BM25Index:
-    """进程内 BM25 索引。线程安全（RAG 在线程池中调用）。"""
+    """进程内 BM25 索引。线程安全（RAG 在线程池中调用）。
+
+    重建策略：rank-bm25 无增量 API，任何增删都要全量重分词重建 —— 旧版在
+    每次 add/remove 时同步重建，批量入库 N 篇就是 N 次全量重建（O(n²) 热点）。
+    现改为**脏标记 + 查询时懒重建**：增删只标记脏位（O(1)），下一次 search
+    前统一重建一次 —— 查询永远基于最新语料，批量入库期间的开销摊薄为一次。
+    """
 
     corpus: list[BM25Doc] = field(default_factory=list)
     _bm25: object | None = None
     _ids: list[str] = field(default_factory=list)
     _id_set: set[str] = field(default_factory=set)
     _lock: threading.Lock = field(default_factory=threading.Lock)
-    _built: bool = False
+    _dirty: bool = False
 
     def __post_init__(self) -> None:
         pass
@@ -66,24 +72,32 @@ class BM25Index:
             self._rebuild()
 
     def add(self, doc_id: str, text: str) -> None:
-        """增量插入/更新单文档。索引量小时直接重建（rank-bm25 无增量 API）。"""
+        """增量插入/更新单文档（只标记脏位，重建推迟到下一次 search 前）。
+
+        `_id_set` 必须同步维护：懒重建期间它仍承担重复 doc_id 的判重职责。
+        """
         if not text:
             return
         with self._lock:
             if doc_id in self._id_set:
                 self.corpus = [d for d in self.corpus if d.doc_id != doc_id]
+            else:
+                self._id_set.add(doc_id)
             self.corpus.append(BM25Doc(doc_id, text))
-            self._rebuild()
+            self._dirty = True
 
     def remove(self, doc_id: str) -> None:
         with self._lock:
             if doc_id in self._id_set:
                 self.corpus = [d for d in self.corpus if d.doc_id != doc_id]
-                self._rebuild()
+                self._id_set.discard(doc_id)
+                self._dirty = True
 
     def search(self, query: str, top_k: int = 20) -> list[tuple[str, float]]:
         """返回 [(doc_id, score)]，按分数降序。空索引/未构建返回 []。"""
         with self._lock:
+            if self._dirty:
+                self._rebuild()
             if self._bm25 is None or not self.corpus:
                 return []
             try:
@@ -105,7 +119,7 @@ class BM25Index:
             self._id_set = set(self._ids)
             tokenized = [_tokenize(d.text) for d in self.corpus]
             self._bm25 = BM25Plus(tokenized) if tokenized else None
-            self._built = True
+            self._dirty = False
         except Exception as e:
             logger.warning(f"bm25 rebuild failed: {e}")
             self._bm25 = None

@@ -1,6 +1,6 @@
 """
-Embedding 管理器 — 默认 fastembed（本地 ONNX, CPU 即可, 无需 Ollama）。
-可选 bge-m3(Ollama) / openai。
+Embedding 管理器 — 默认 fastembed（本地 ONNX, CPU 即可, 无外部服务依赖）。
+可选 openai。
 """
 
 from __future__ import annotations
@@ -97,17 +97,6 @@ class EmbeddingManager:
 
         if provider == "fastembed":
             return _FastEmbedAdapter(model, getattr(Config, "FASTEMBED_CACHE_DIR", None))
-        if provider == "bge-m3":
-            # 本地 bge-m3 via Ollama（可选，需要额外安装 langchain-ollama）
-            try:
-                from langchain_ollama import OllamaEmbeddings
-            except ImportError as e:
-                raise RuntimeError(
-                    "EMBED_PROVIDER=bge-m3 需要 Ollama 与 langchain-ollama："
-                    "pip install langchain-ollama。若想零依赖本地推理，请使用 EMBED_PROVIDER=fastembed。"
-                ) from e
-            logger.info("Embedding provider: bge-m3 (local via Ollama)")
-            return OllamaEmbeddings(base_url=Config.OLLAMA_BASE_URL, model=model)
         if provider == "openai":
             from langchain_openai import OpenAIEmbeddings
 
@@ -116,7 +105,7 @@ class EmbeddingManager:
                 api_key=Config.OPENAI_API_KEY, base_url=Config.OPENAI_BASE_URL, model=model
             )
         raise ValueError(
-            f"Unknown embedding provider: {provider!r} (可选: fastembed | bge-m3 | openai)"
+            f"Unknown embedding provider: {provider!r} (可选: fastembed | openai)"
         )
 
     def embed_text(self, text: str) -> list[float]:

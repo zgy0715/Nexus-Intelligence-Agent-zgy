@@ -47,6 +47,26 @@ async def _run_sync(fn, *args):
     return await asyncio.get_running_loop().run_in_executor(None, fn, *args)
 
 
+async def _recent_history() -> list[dict]:
+    """最近若干轮对话消息（多轮上下文）。失败返回空，不影响问答主流程。"""
+    def _read() -> list[dict]:
+        messages = _get_db().list("chat_history", order_by="created_at", limit=Config.QA_HISTORY_MESSAGES)
+        messages.reverse()  # 按时间正序
+        out = []
+        for m in messages:
+            role = m.get("role")
+            content = (m.get("content") or "").strip()
+            if role in ("user", "assistant") and content:
+                out.append({"role": role, "content": content[:600]})
+        return out
+
+    try:
+        return await _run_sync(_read)
+    except Exception as e:
+        logger.debug(f"load qa history failed: {e}")
+        return []
+
+
 async def _save_history(question: str, answer: str, sources: list) -> None:
     def _write():
         from uuid import uuid4
@@ -77,7 +97,7 @@ _rag_backoff_until = 0.0
 RAG_BACKOFF_SECONDS = 300.0
 
 
-async def _try_rag(question: str) -> dict | None:
+async def _try_rag(question: str, history: list[dict] | None = None) -> dict | None:
     """尝试 RAG 检索。超时/失败/退避期内返回 None（调用方降级为普通聊天）。"""
     global _rag_backoff_until
     if time.monotonic() < _rag_backoff_until:
@@ -89,7 +109,7 @@ async def _try_rag(question: str) -> dict | None:
         async def _rag_answer(q: str) -> dict:
             # 引擎构造（ONNX 模型加载）与检索都是阻塞调用，放进线程池执行
             engine = await aget_rag_engine()
-            return await engine.aquery(q)
+            return await engine.aquery(q, history=history)
 
         result = await asyncio.wait_for(
             _rag_answer(question), timeout=max(5.0, Config.RAG_TIMEOUT)
@@ -117,9 +137,10 @@ async def query_smart(req: QueryRequest):
     sources: list = []
     mode = "chat"
     rag_ok = False
+    history = await _recent_history()
 
     # 第一步：尝试 RAG 检索
-    rag_result = await _try_rag(question)
+    rag_result = await _try_rag(question, history)
     if rag_result:
         relevance = float(rag_result.get("relevance") or 0.0)
         rag_sources = rag_result.get("sources") or []
@@ -141,6 +162,7 @@ async def query_smart(req: QueryRequest):
             answer = await llm.achat(
                 [
                     {"role": "system", "content": "你是一个智能助手。用中文回答用户的问题，回答要简洁准确。"},
+                    *history,
                     {"role": "user", "content": question},
                 ],
                 temperature=0.7,
@@ -166,12 +188,13 @@ async def query_stream(req: QueryRequest):
         answer_parts: list[str] = []
         sources: list = []
         mode = "chat"
+        history = await _recent_history()
         try:
             from nia.rag.rag_engine import aget_rag_engine
 
             try:
                 engine = await aget_rag_engine()
-                async for chunk in engine.aquery_stream(req.question):
+                async for chunk in engine.aquery_stream(req.question, history=history):
                     if chunk["type"] == "sources":
                         sources = chunk.get("sources") or []
                         mode = "rag"
@@ -197,6 +220,7 @@ async def query_stream(req: QueryRequest):
                     answer = await llm.achat(
                         [
                             {"role": "system", "content": "你是一个智能助手。用中文回答用户的问题，回答要简洁准确。"},
+                            *history,
                             {"role": "user", "content": req.question},
                         ],
                         temperature=0.7,

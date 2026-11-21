@@ -18,6 +18,8 @@ from nia.api.crawl import router as crawl_router
 from nia.api.data import router as data_router
 from nia.api.monitor import router as monitor_router
 from nia.api.query import router as query_router
+from nia.api.schedules import router as schedules_router
+from nia.api.schedules import scheduler_loop
 from nia.api.settings import router as settings_router
 from nia.utils.config import Config
 
@@ -43,9 +45,17 @@ async def _init_storage() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await _init_storage()
+    scheduler_task = asyncio.create_task(scheduler_loop())
     try:
         yield
     finally:
+        scheduler_task.cancel()
+        try:
+            await scheduler_task
+        except (asyncio.CancelledError, Exception):
+            pass
+
+        # ── 优雅关闭：释放异步浏览器、HttpClient 与共享 LLM 连接池 ──
         # ── 优雅关闭：释放异步浏览器、HttpClient 与共享 LLM 连接池 ──
         try:
             from nia.crawler.browser_pool import AsyncBrowserPool
@@ -119,6 +129,7 @@ app.include_router(crawl_router)
 app.include_router(query_router)
 app.include_router(data_router)
 app.include_router(monitor_router)
+app.include_router(schedules_router)
 app.include_router(settings_router)
 
 

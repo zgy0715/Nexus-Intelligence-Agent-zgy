@@ -115,6 +115,7 @@ class AsyncFetcher:
                 max_keepalive_connections=max(self._config.concurrency, 4),
             ),
             follow_redirects=False,  # 手动跟随，逐跳校验
+            trust_env=False,  # 系统代理环境变量可能含 httpx 无法解析的条目
             headers={
                 "User-Agent": _UA,
                 "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5",
@@ -181,6 +182,12 @@ class AsyncFetcher:
         return result
 
     async def _fetch_with_policy(self, url: str) -> FetchResult:
+        # SSRF 总闸：必须先于 robots 检查 —— 否则 robots.txt 预取本身可以先打到内网地址。
+        # 这里挡下 httpx 路径、JS 渲染路径与 JS 回退路径的所有入口（各路径内部仍有逐跳复检）。
+        ok, reason = resolve_and_check(url)
+        if not ok:
+            return FetchResult(url=url, success=False, error=f"URL 被安全策略拦截: {reason}")
+
         try:
             allowed, delay = await self._check_robots(url)
         except Exception as e:  # robots 检查本身失败不应阻断抓取
@@ -326,12 +333,33 @@ class AsyncFetcher:
     async def _fetch_js(self, url: str) -> FetchResult:
         from nia.crawler.browser_pool import AsyncBrowserPool
 
+        # 浏览器路径的 SSRF 复检（纵深防御第二道）：入口已校验过，这里再挡一次，
+        # 防止未来有人绕过 _fetch_with_policy 直接调本方法。
+        ok, reason = resolve_and_check(url)
+        if not ok:
+            return FetchResult(url=url, success=False, error=f"URL 被安全策略拦截: {reason}")
+
         timeout = max(30.0, self._config.request_timeout * 2)
         async with self._js_sem:
             try:
                 data = await asyncio.wait_for(AsyncBrowserPool.fetch(url), timeout=timeout)
             except asyncio.TimeoutError:
                 return FetchResult(url=url, success=False, error=f"JS 渲染超时（{timeout:.0f}s）", rendered_js=True)
+
+        # 浏览器内部会自动跟随重定向（无法逐跳拦截），至少复查落地 URL：
+        # 若被重定向到内网地址，判定本次抓取失败，内容不进入后续解析/入库管线。
+        final_url = data.get("final_url") or url
+        ok, reason = resolve_and_check(final_url)
+        if not ok:
+            logger.warning("JS 渲染落地地址被安全策略拦截: %s -> %s (%s)", url, final_url, reason)
+            return FetchResult(
+                url=url,
+                final_url=final_url,
+                success=False,
+                rendered_js=True,
+                error=f"重定向落地地址被安全策略拦截: {reason}",
+            )
+
         return FetchResult(
             url=url,
             final_url=data.get("final_url") or url,

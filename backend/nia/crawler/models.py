@@ -63,6 +63,8 @@ class PageContent:
     anchors: dict[str, str] = field(default_factory=dict)
     # v3：页面元数据（description/author/date/open graph/JSON-LD 摘要）
     metadata: dict = field(default_factory=dict)
+    # 来源页 URL（整站爬取时由 frontier 记录），用于爬取路径图谱
+    parent_url: str = ""
 
 
 @dataclass

@@ -108,16 +108,16 @@ class URLFrontier:
             self.skipped += len(urls) - cap
         return added
 
-    def pop_batch(self, n: int) -> list[tuple[str, int]]:
-        """取出至多 n 个优先级最高的待抓取项，移入 visited。"""
-        batch: list[tuple[str, int]] = []
+    def pop_batch(self, n: int) -> list[tuple[str, int, str]]:
+        """取出至多 n 个优先级最高的待抓取项 (url, depth, parent)，移入 visited。"""
+        batch: list[tuple[str, int, str]] = []
         while self._queue and len(batch) < n:
-            _score, _seq, depth, url, _parent = heapq.heappop(self._queue)
+            _score, _seq, depth, url, parent = heapq.heappop(self._queue)
             self.pending.discard(url)
             if url in self.visited:
                 continue
             self.visited.add(url)
-            batch.append((url, depth))
+            batch.append((url, depth, parent))
         return batch
 
     def has_next(self) -> bool:

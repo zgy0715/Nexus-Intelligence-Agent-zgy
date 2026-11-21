@@ -1,6 +1,7 @@
 """Daily monitoring reports backed by MySQL and UTC date windows."""
 
 import logging
+from datetime import datetime, time, timedelta
 
 import redis
 from sqlalchemy import text
@@ -90,8 +91,17 @@ class DailyReport:
             logger.warning("get_task_stats failed: %s", e)
             return {**empty, "degraded": True}
 
-    def get_domain_stats(self, days_ago: int = 0) -> list:
-        start, end = utc_today_range(days_ago)
+    def get_domain_stats(self, days: int = 1) -> list:
+        """近 days 天（含今天）的域名分布。
+
+        注意与 ``utc_today_range(days_ago)`` 的语义区分：后者是「往回推 N 天
+        的那一天」的单日窗口；这里的语义是「最近 N 天」的连续窗口 ——
+        知识库站点构成需要的是后者。
+        """
+        days = max(1, int(days))
+        today = utc_date()
+        start = datetime.combine(today - timedelta(days=days - 1), time.min)
+        end = datetime.combine(today + timedelta(days=1), time.min)
         try:
             stmt = text("""
                 SELECT domain, COUNT(*) AS count FROM crawled_data
