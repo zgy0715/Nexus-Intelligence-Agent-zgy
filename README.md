@@ -118,16 +118,24 @@ JS 渲染（抓重 JS 站点时勾选）：`python -m playwright install chromiu
 | 方法 | 路径 | 说明 |
 |---|---|---|
 | POST | `/api/agent` | 启动自主 Agent |
+| GET | `/api/agent` · `/api/agent/{id}` | 运行列表 / 单次运行详情 |
 | GET | `/api/agent/{id}/stream` | SSE 事件流（Last-Event-ID 断线续读） |
 | GET | `/api/agent/{id}/events` | 历史运行回放 |
 | POST | `/api/agent/{id}/cancel` | 取消 |
 | POST | `/api/crawl` / `/api/crawl/batch` | 单 URL / 批量·整站爬取 |
+| GET | `/api/crawl/results` · `/{task_id}/progress` | 结果分页 / SSE 进度 |
+| DELETE | `/api/crawl/{task_id}` | 删除任务及其全部数据（含向量/BM25 清理） |
+| POST | `/api/crawl/batch/{id}/cancel` | 取消批量任务 |
 | GET | `/api/crawl/batch/{id}/stream` | 批量 SSE 进度 |
-| POST | `/api/query` · `/api/query/stream` | 问答 / **流式问答** |
+| POST | `/api/query` · `/api/query/stream` | 问答 / **流式问答**（多轮上下文） |
 | GET/DELETE | `/api/query/history` | 聊天历史 |
 | GET | `/api/data` · `/api/data/{id}` | 数据浏览（详情含 raw_html） |
+| GET | `/api/data/stats` · `/api/data/export?format=json\|csv` | 知识库统计 / 导出（CSV 带 BOM） |
 | GET | `/api/monitor/stats` · `/domains` · `/timeseries` · `/alert` | 监控统计 |
-| GET | `/api/settings/config` · `/status` | 配置（含模型角色）与服务状态（含辅助模型探测） |
+| GET | `/api/monitor/graph` · `/cost` · `/changes` · `/heatmap` | 爬取图谱 / token 成本 / 站点变更 / 活跃度热力图 |
+| GET/POST/PATCH/DELETE | `/api/schedules` | 定时采集 CRUD |
+| POST | `/api/schedules/{id}/run` | 立即执行定时任务 |
+| GET | `/api/settings/config` · `/status` | 配置（含 Agent 参数与辅助模型）与服务状态 |
 | POST | `/api/admin/reindex` | 全量重建向量 + BM25 索引 |
 | GET | `/api/health` · `/api/ready` | 存活 / 就绪探针 |
 
@@ -142,6 +150,24 @@ JS 渲染（抓重 JS 站点时勾选）：`python -m playwright install chromiu
 ## 生产部署
 
 前端 `npm run build` 后设 `STATIC_DIR` 指向 `frontend/dist`，FastAPI 同端口托管 SPA；公网务必设置 `API_AUTH_TOKEN` 并收紧 `CORS_ORIGINS`。
+
+## 测试与 CI
+
+后端自带离线单元测试（不依赖 MySQL / Redis / DeepSeek / 外网 DNS）：
+
+```bash
+cd backend && python -m pytest        # 74 项：SSRF 五层防御 / 上下文压缩 / Agent 主循环集成 / 状态去重 / BM25 / JSON 宽松解析 / 工具 schema
+python verify.py                      # 端到端自检（依赖 + RAG 冒烟 + 基础设施连通性）
+python scripts/e2e_check.py           # 29 项全模块在线检验（需服务在跑 + API Key：Agent 实跑/问答/导出/定时/取消/图谱/成本）
+```
+
+前端：`npm run check`（tsc）· `npm run lint` · `npm run build`。
+CI（`.github/workflows/ci.yml`）自动跑：后端 pytest + 前端 tsc/eslint/build，全绿才算通过。
+
+## Roadmap
+
+- **验证码识别接线**：`nia/captcha/` 已完整实现（ddddocr 本地 OCR + 多模态 VL 模型，支持文字/滑块/点选，识别结果按图片哈希缓存 Redis），尚未接入爬取流程 —— 计划以「JS 渲染遇验证码 → 自动识别 → 回填」的钩子形式接入。
+- **只读分享页**：报告/大屏生成公开只读链接，便于分享分发。
 
 ## 更新日志
 
