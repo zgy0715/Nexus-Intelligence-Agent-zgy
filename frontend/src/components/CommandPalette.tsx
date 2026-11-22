@@ -8,6 +8,7 @@ import { AnimatePresence, motion } from "motion/react";
 import {
   Activity,
   Bot,
+  CalendarClock,
   CornerDownLeft,
   Database,
   Globe,
@@ -26,8 +27,10 @@ interface CommandItem {
 }
 
 const COMMANDS: CommandItem[] = [
-  { label: "自主 Agent", hint: "核心控制台", to: "/", icon: Bot, keywords: "agent 爬取 自主" },
+  { label: "介绍首页", hint: "项目概览 / 使用流程", to: "/", icon: Search, keywords: "home 首页 介绍 大赛" },
+  { label: "自主 Agent", hint: "核心控制台", to: "/agent", icon: Bot, keywords: "agent 爬取 自主" },
   { label: "批量爬取", hint: "整站 / 批量抓取", to: "/crawl", icon: Globe, keywords: "crawl batch 爬取 整站" },
+  { label: "定时采集", hint: "周期任务 / 变更监控", to: "/schedules", icon: CalendarClock, keywords: "schedule cron 定时 监控 变更" },
   { label: "语义问答", hint: "流式 RAG 问答", to: "/qa", icon: MessageSquare, keywords: "qa query 问答 检索" },
   { label: "数据浏览", hint: "已爬取数据", to: "/data", icon: Database, keywords: "data 数据 浏览" },
   { label: "任务监控", hint: "统计图表", to: "/monitor", icon: Activity, keywords: "monitor 监控 统计 图表" },
@@ -53,7 +56,9 @@ export function CommandPalette() {
       }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+    };
   }, []);
 
   useEffect(() => {

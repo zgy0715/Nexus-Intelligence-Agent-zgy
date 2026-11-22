@@ -69,4 +69,6 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
 );
 Button.displayName = "Button";
 
+// shadcn/ui 约定：buttonVariants 与 Button 同文件导出（副本可粘贴性优先）
+// eslint-disable-next-line react-refresh/only-export-components
 export { Button, buttonVariants };

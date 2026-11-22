@@ -7,13 +7,17 @@ import type {
   ChatMessage,
   MonitorStats,
   ServiceStatus,
-  Source,
   AgentEvent,
   AgentEventReplay,
   AgentRunSummary,
   BatchEvent,
   QueryStreamEvent,
   TimeseriesPoint,
+  Schedule,
+  SchedulePayload,
+  CrawlGraph,
+  CostReport,
+  SiteChange,
 } from '@/types';
 
 const BASE_URL = (import.meta.env.VITE_API_BASE_URL as string | undefined)?.replace(/\/$/, '') || '/api';
@@ -98,12 +102,6 @@ async function request<T>(path: string, options?: RequestInit): Promise<T> {
   return JSON.parse(text) as T;
 }
 
-export interface CrawlProgress {
-  step: string;
-  progress: number;
-  message: string;
-}
-
 export interface AgentStartParams {
   goal: string;
   seeds: string[];
@@ -155,13 +153,6 @@ export const api = {
 
   // ── 爬取 ────────────────────────────────────────────────────────
 
-  crawl(url: string, instruction: string, useJs?: boolean) {
-    return request<{ task_id: string; status: string; message: string }>('/crawl', {
-      method: 'POST',
-      body: JSON.stringify({ url, instruction, use_js: useJs }),
-    });
-  },
-
   batchCrawl(params: BatchCrawlParams) {
     return request<{ task_id: string; status: string; seeds: string[] }>('/crawl/batch', {
       method: 'POST',
@@ -184,62 +175,7 @@ export const api = {
     });
   },
 
-  /**
-   * SSE 订阅爬取进度
-   * @returns 清理函数
-   */
-  subscribeCrawlProgress(
-    taskId: string,
-    onProgress: (data: CrawlProgress) => void,
-    onDone: () => void,
-    onError: (error: string) => void,
-  ): () => void {
-    const eventSource = new EventSource(sseUrl(`/crawl/${taskId}/progress`));
-
-    eventSource.onmessage = (event) => {
-      if (event.data === '[DONE]') {
-        eventSource.close();
-        onDone();
-        return;
-      }
-      try {
-        const data = JSON.parse(event.data) as CrawlProgress;
-        onProgress(data);
-      } catch {
-        // ignore parse errors
-      }
-    };
-
-    eventSource.onerror = () => {
-      eventSource.close();
-      onError('连接中断');
-    };
-
-    return () => eventSource.close();
-  },
-
-  getTaskStatus(taskId: string) {
-    return request<CrawlResult>(`/crawl/${taskId}`);
-  },
-
-  getCrawlResults(page = 1, pageSize = 20) {
-    return request<{ results: CrawlResult[]; total: number; page: number; page_size: number }>(
-      `/crawl/results?page=${page}&page_size=${pageSize}`,
-    );
-  },
-
-  deleteTask(taskId: string) {
-    return request<{ message: string }>(`/crawl/${taskId}`, { method: 'DELETE' });
-  },
-
   // ── 问答 ────────────────────────────────────────────────────────
-
-  query(question: string) {
-    return request<{ answer: string; sources: Source[] }>('/query', {
-      method: 'POST',
-      body: JSON.stringify({ question }),
-    });
-  },
 
   /**
    * 流式问答（POST SSE）。EventSource 不支持 POST，这里用 fetch + ReadableStream
@@ -328,14 +264,27 @@ export const api = {
     return request<CrawlResult>(`/data/${encodeURIComponent(dataId)}`);
   },
 
+  /** 知识库总览统计（数据浏览页顶部卡片） */
+  getDataStats() {
+    return request<{ total: number; domains: number; chars: number; latest: string | null }>('/data/stats');
+  },
+
   // ── 监控 ────────────────────────────────────────────────────────
 
   getMonitorStats() {
     return request<MonitorStats>('/monitor/stats');
   },
 
-  getMonitorDomains() {
-    return request<{ domains: { domain: string; count: number }[] }>('/monitor/domains');
+  /** 知识库站点构成：默认取全部历史（大窗口），而非仅当天 */
+  getMonitorDomains(days = 3650) {
+    return request<{ domains: { domain: string; count: number }[] }>(`/monitor/domains?days=${days}`);
+  },
+
+  /** 按天聚合的采集活跃度热力图（站点变更数 + 爬取任务数） */
+  getMonitorHeatmap(days = 84) {
+    return request<{ heatmap: { date: string; changes: number; tasks: number }[] }>(
+      `/monitor/heatmap?days=${days}`,
+    );
   },
 
   getMonitorAlert() {
@@ -344,6 +293,53 @@ export const api = {
 
   getMonitorTimeseries(days = 14) {
     return request<{ series: TimeseriesPoint[] }>(`/monitor/timeseries?days=${days}`);
+  },
+
+  getMonitorGraph() {
+    return request<CrawlGraph>('/monitor/graph');
+  },
+
+  getMonitorCost() {
+    return request<CostReport>('/monitor/cost');
+  },
+
+  getMonitorChanges(limit = 50) {
+    return request<{ changes: SiteChange[] }>(`/monitor/changes?limit=${limit}`);
+  },
+
+  // ── 定时采集 ────────────────────────────────────────────────────
+
+  listSchedules() {
+    return request<{ schedules: Schedule[] }>('/schedules');
+  },
+
+  createSchedule(payload: SchedulePayload) {
+    return request<Schedule>('/schedules', {
+      method: 'POST',
+      body: JSON.stringify(payload),
+    });
+  },
+
+  updateSchedule(id: string, patch: Partial<SchedulePayload>) {
+    return request<Schedule>(`/schedules/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  },
+
+  deleteSchedule(id: string) {
+    return request<{ message: string }>(`/schedules/${id}`, { method: 'DELETE' });
+  },
+
+  runSchedule(id: string) {
+    return request<{ message: string }>(`/schedules/${id}/run`, { method: 'POST' });
+  },
+
+  // ── 导出 ────────────────────────────────────────────────────────
+
+  /** 数据全量导出下载地址（带鉴权 token，如已配置） */
+  dataExportUrl(format: 'json' | 'csv'): string {
+    return sseUrl(`/data/export?format=${format}`);
   },
 
   // ── 设置 ────────────────────────────────────────────────────────

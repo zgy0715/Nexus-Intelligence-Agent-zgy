@@ -23,6 +23,15 @@ export interface AgentProgress {
 
 export type AgentRunStatus = "idle" | "starting" | "running" | "finished" | "error";
 
+export interface TokenPoint {
+  /** Agent 步数（1 起） */
+  step: number;
+  /** 上下文估算 tokens（触发压缩的启发式估算值） */
+  est: number;
+  /** 累计消耗 tokens */
+  total: number;
+}
+
 export interface AgentSnapshot {
   status: AgentRunStatus;
   runId: string | null;
@@ -36,6 +45,10 @@ export interface AgentSnapshot {
   estTokens: number;
   compactions: number;
   compactionSaved: number;
+  /** 每步 token 序列（预算仪表的折线图数据源；回放时同样重建） */
+  tokenSeries: TokenPoint[];
+  /** 发生上下文压缩的步数（折线图竖线标记） */
+  compactionSteps: number[];
   report: string;
   finishReason: string;
   error: string;
@@ -52,6 +65,8 @@ const INITIAL: AgentSnapshot = {
   estTokens: 0,
   compactions: 0,
   compactionSaved: 0,
+  tokenSeries: [],
+  compactionSteps: [],
   report: "",
   finishReason: "",
   error: "",
@@ -85,11 +100,26 @@ export function useAgentRun() {
             visited: e.visited,
           };
           if (e.usage) next.usage = e.usage;
-          if (typeof e.est_context_tokens === "number") next.estTokens = e.est_context_tokens;
+          if (typeof e.est_context_tokens === "number") {
+            next.estTokens = e.est_context_tokens;
+            // 记录每步 token 序列，供预算仪表的折线图展示趋势与压缩拐点
+            next.tokenSeries = [
+              ...prev.tokenSeries,
+              {
+                step: e.steps_used,
+                est: e.est_context_tokens,
+                total: e.usage?.total_tokens ?? prev.usage?.total_tokens ?? 0,
+              },
+            ].slice(-200);
+          }
           break;
         case "compaction":
           next.compactions = e.count;
           next.compactionSaved += e.saved_tokens;
+          next.compactionSteps = [
+            ...prev.compactionSteps,
+            prev.tokenSeries.at(-1)?.step ?? 0,
+          ];
           next.timeline = [...prev.timeline, e].slice(-MAX_TIMELINE);
           break;
         case "finding":

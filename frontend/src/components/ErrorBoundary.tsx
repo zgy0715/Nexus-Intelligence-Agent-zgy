@@ -48,7 +48,7 @@ export default class ErrorBoundary extends Component<Props, State> {
             </p>
             {/insertBefore|removeChild|not a child/i.test(this.state.error?.message || '') && (
               <p className="mb-4 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-foreground">
-                💡 此类报错通常由<strong>网页翻译插件</strong>（沉浸式翻译 / Chrome「翻译此页」）注入 DOM 引起。
+                此类报错通常由<strong>网页翻译插件</strong>（沉浸式翻译 / Chrome「翻译此页」）注入 DOM 引起。
                 请关闭本站翻译后刷新。
               </p>
             )}

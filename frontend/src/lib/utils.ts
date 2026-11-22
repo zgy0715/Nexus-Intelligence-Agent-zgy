@@ -22,8 +22,3 @@ export function timeAgo(iso?: string): string {
   if (day < 30) return `${day} 天前`;
   return d.toLocaleDateString("zh-CN");
 }
-
-/** 截断长字符串。 */
-export function truncate(s: string, n = 80): string {
-  return s.length > n ? s.slice(0, n) + "…" : s;
-}

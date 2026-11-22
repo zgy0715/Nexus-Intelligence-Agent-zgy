@@ -34,6 +34,8 @@ export interface ChatMessage {
   id?: string;
   role: 'user' | 'assistant';
   content: string;
+  /** 仅 assistant：产生该回答的问题（供“重新生成”使用，刷新后仍可用） */
+  question?: string;
   sources?: Source[];
   timestamp?: string;
   created_at?: string;
@@ -71,8 +73,8 @@ export type QueryStreamEvent =
       sources: Source[];
       relevance: number;
       debug?: Record<string, unknown>;
-      /** v3.1：模型链路（改写=辅助模型，回答=主模型） */
-      models?: { answer?: string; rewrite?: string | null };
+      /** 模型链路（回答=主模型） */
+      models?: { answer?: string };
     }
   | { type: 'delta'; text: string }
   | { type: 'done'; mode: 'rag' | 'chat' }
@@ -115,7 +117,6 @@ export type AgentEvent =
       budget_pages: number;
       budget_steps: number;
       main_model?: string;
-      aux_model?: string;
     })
   | (AgentEventBase & { type: "thought"; text: string; model?: string })
   | (AgentEventBase & { type: "action"; tool: string; args: Record<string, unknown>; model?: string })
@@ -203,7 +204,7 @@ export interface ServiceStatus {
     models?: string[];
     error?: string;
   };
-  /** v3.1：辅助模型（本地 Ollama 等，角色：摘要/查询改写） */
+  /** 辅助模型（本地 Ollama 等，角色：上下文摘要/查询改写） */
   aux_llm?: {
     connected: boolean;
     provider: string;
@@ -212,4 +213,71 @@ export interface ServiceStatus {
     role?: string;
     error?: string;
   };
+}
+
+// ── 定时采集 ──────────────────────────────────────────────────────
+
+export interface SchedulePayload {
+  name: string;
+  seeds: string[];
+  instruction?: string;
+  interval_minutes: number;
+  max_depth?: number;
+  max_pages?: number;
+  same_domain_only?: boolean;
+  use_js?: boolean;
+  enabled?: boolean;
+}
+
+export interface Schedule extends SchedulePayload {
+  id: string;
+  last_run_at?: string | null;
+  next_run_at?: string | null;
+  last_status?: string;
+  created_at?: string;
+}
+
+export interface SiteChange {
+  id: string;
+  url: string;
+  title?: string;
+  domain?: string;
+  version_number?: number;
+  created_at?: string;
+  old_snippet?: string;
+  new_snippet?: string;
+}
+
+// ── 图谱 / 成本 ───────────────────────────────────────────────────
+
+export interface GraphNode {
+  id: string;
+  name: string;
+  count?: number;
+  domain?: string;
+}
+
+export interface GraphLink {
+  source: string;
+  target: string;
+  weight?: number;
+}
+
+export interface CrawlGraph {
+  domains: { nodes: GraphNode[]; links: GraphLink[] };
+  pages: { nodes: GraphNode[]; links: GraphLink[] };
+}
+
+export interface CostReport {
+  total: { calls: number; prompt_tokens: number; completion_tokens: number; total_tokens: number };
+  estimated_cost: number;
+  currency: string;
+  price_per_m: { input: number; output: number };
+  runs: {
+    run_id: string;
+    goal: string;
+    created_at?: string | null;
+    total_tokens: number;
+    cost: number;
+  }[];
 }

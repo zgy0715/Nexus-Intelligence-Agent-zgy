@@ -10,6 +10,8 @@ export default defineConfig({
     tsconfigPaths()
   ],
   server: {
+    // 双栈监听：默认只绑 ::1 时，走 IPv4 的浏览器会连接被拒
+    host: true,
     proxy: {
       '/api': {
         target: 'http://127.0.0.1:8000',
@@ -18,6 +20,9 @@ export default defineConfig({
     },
   },
   build: {
+    // echarts 独立 chunk 体积是刻意为之：它只在 Monitor 页被路由 lazy 加载，
+    // 首屏不下载 —— 放宽默认 500KB 告警阈值，让 CI 构建输出干净
+    chunkSizeWarningLimit: 1024,
     rollupOptions: {
       output: {
         // Vite 8 底层是 Rolldown：manualChunks 只支持函数形式；

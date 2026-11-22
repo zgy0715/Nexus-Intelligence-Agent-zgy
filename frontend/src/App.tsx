@@ -4,9 +4,11 @@ import Layout from "./components/Layout";
 import ErrorBoundary from "./components/ErrorBoundary";
 import { Skeleton } from "./components/ui/Skeleton";
 
-// 路由级代码分割：首屏只加载 Agent 控制台，其余页面按需拉取
+// 路由级代码分割：首屏只加载介绍首页，其余页面按需拉取
+const LandingPage = lazy(() => import("./pages/LandingPage"));
 const AgentPage = lazy(() => import("./pages/AgentPage"));
 const CrawlPage = lazy(() => import("./pages/CrawlPage"));
+const SchedulesPage = lazy(() => import("./pages/SchedulesPage"));
 const QueryPage = lazy(() => import("./pages/QueryPage"));
 const DataPage = lazy(() => import("./pages/DataPage"));
 const MonitorPage = lazy(() => import("./pages/MonitorPage"));
@@ -29,9 +31,17 @@ export default function App() {
   return (
     <ErrorBoundary>
       <Routes>
+        <Route
+          path="/"
+          element={
+            <Suspense fallback={null}>
+              <LandingPage />
+            </Suspense>
+          }
+        />
         <Route element={<Layout />}>
           <Route
-            path="/"
+            path="/agent"
             element={
               <Suspense fallback={<PageFallback />}>
                 <AgentPage />
@@ -43,6 +53,14 @@ export default function App() {
             element={
               <Suspense fallback={<PageFallback />}>
                 <CrawlPage />
+              </Suspense>
+            }
+          />
+          <Route
+            path="/schedules"
+            element={
+              <Suspense fallback={<PageFallback />}>
+                <SchedulesPage />
               </Suspense>
             }
           />

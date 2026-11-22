@@ -7,52 +7,31 @@
    不再像旧版硬编码 indigo 色值。
  */
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useRef } from "react";
 import * as echarts from "echarts/core";
-import { BarChart, LineChart } from "echarts/charts";
+import { BarChart, LineChart, GraphChart, TreemapChart, PieChart } from "echarts/charts";
 import {
   GridComponent,
   TooltipComponent,
   LegendComponent,
+  MarkLineComponent,
 } from "echarts/components";
 import { CanvasRenderer } from "echarts/renderers";
 import type { EChartsCoreOption } from "echarts/core";
-import { useStore } from "@/store";
+import { useChartTheme } from "@/hooks/useChartTheme";
 
 echarts.use([
   BarChart,
   LineChart,
+  GraphChart,
+  TreemapChart,
+  PieChart,
   GridComponent,
   TooltipComponent,
   LegendComponent,
+  MarkLineComponent,
   CanvasRenderer,
 ]);
-
-/** 读取当前主题下的 CSS 变量色值 */
-export function useChartTheme() {
-  const theme = useStore((s) => s.theme);
-  return useMemo(() => {
-    const style = getComputedStyle(document.documentElement);
-    const read = (name: string) => style.getPropertyValue(name).trim();
-    const hsl = (name: string, alpha = 1) =>
-      `hsl(${read(name)} / ${alpha})`;
-    return {
-      theme,
-      label: hsl("--muted-foreground", 0.9),
-      axis: hsl("--border"),
-      split: hsl("--border", 0.5),
-      tooltipBg: hsl("--popover"),
-      tooltipBorder: hsl("--border"),
-      tooltipText: hsl("--popover-foreground"),
-      brand: hsl("--brand"),
-      success: hsl("--success"),
-      warning: hsl("--warning"),
-      destructive: hsl("--destructive"),
-      foreground: hsl("--foreground"),
-      muted: hsl("--muted"),
-    };
-  }, [theme]);
-}
 
 interface ChartProps {
   option: EChartsCoreOption;

@@ -30,6 +30,13 @@ import { Dialog } from "@/components/Dialog";
 import { useDebounce } from "@/hooks/useDebounce";
 import { cn, timeAgo } from "@/lib/utils";
 
+/** 字数紧凑显示：12345 → 1.2万（中文语境比 12.3K 直观） */
+function compactNumber(n: number): string {
+  if (n >= 100_000_000) return `${(n / 100_000_000).toFixed(1)}亿`;
+  if (n >= 10_000) return `${(n / 10_000).toFixed(1)}万`;
+  return n.toLocaleString();
+}
+
 const PAGE_SIZE = 12;
 
 /** 简易 JSON 树（折叠数组/对象，替代一坨 <pre>） */
@@ -108,14 +115,16 @@ function DetailDialog({ item, onClose }: { item: CrawlResult | null; onClose: ()
         {item?.created_at && <span className="text-xs text-muted-foreground">{timeAgo(item.created_at)}</span>}
       </div>
 
-      <div className="mb-3 inline-flex rounded-lg border border-border p-0.5">
+      <div className="mb-4 flex border-b border-border">
         {visibleTabs.map((t) => (
           <button
             key={t.key}
             onClick={() => setTab(t.key)}
             className={cn(
-              "flex items-center gap-1.5 rounded-[7px] px-3 py-1.5 text-xs transition",
-              activeTab === t.key ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:text-foreground",
+              "-mb-px flex items-center gap-1.5 border-b-2 px-3 py-2 text-xs transition-colors",
+              activeTab === t.key
+                ? "border-brand font-medium text-foreground"
+                : "border-transparent text-muted-foreground hover:text-foreground",
             )}
           >
             <t.icon className="h-3 w-3" />
@@ -169,33 +178,69 @@ export default function DataPage() {
     queryFn: () => api.getData(page, PAGE_SIZE, debouncedSearch || undefined),
     placeholderData: (prev) => prev, // 翻页/搜索时保持上一页数据，不闪骨架
   });
+  const statsQuery = useQuery({
+    queryKey: ["data-stats"],
+    queryFn: api.getDataStats,
+    refetchInterval: 60_000,
+  });
 
   const rows = dataQuery.data?.data ?? [];
   const total = dataQuery.data?.total ?? 0;
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const stats = statsQuery.data;
 
   return (
-    <div className="mx-auto max-w-7xl p-4 lg:p-6">
+    <div className="mx-auto max-w-[1440px] p-4 lg:p-8">
       <PageHeader
         icon={Database}
+        eyebrow="情报 · Knowledge"
         title="数据浏览"
         subtitle={`已爬取的结构化数据（共 ${total} 条）`}
         actions={
-          <Button variant="outline" size="sm" onClick={() => queryClient.invalidateQueries({ queryKey: ["data"] })}>
-            <Search className="h-4 w-4" /> 刷新
-          </Button>
+          <>
+            <Button variant="outline" size="sm" asChild>
+              <a href={api.dataExportUrl("json")} download="nia-data-export.json">导出 JSON</a>
+            </Button>
+            <Button variant="outline" size="sm" asChild>
+              <a href={api.dataExportUrl("csv")} download="nia-data-export.csv">导出 CSV</a>
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => queryClient.invalidateQueries({ queryKey: ["data"] })}>
+              <Search className="h-4 w-4" /> 刷新
+            </Button>
+          </>
         }
       />
 
-      {/* 搜索 */}
-      <div className="relative mb-4 max-w-md">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-        <Input
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          placeholder="按 URL / 域名 / 标题搜索…"
-          className="h-10 pl-9"
-        />
+      {/* 知识库总览统计卡 */}
+      <div className="mb-4 grid grid-cols-2 gap-3 xl:grid-cols-4">
+        {[
+          { label: "文档总数", value: (stats?.total ?? 0).toLocaleString(), sub: "crawled_data 记录" },
+          { label: "站点数", value: (stats?.domains ?? 0).toLocaleString(), sub: "去重域名" },
+          { label: "正文总字数", value: compactNumber(stats?.chars ?? 0), sub: "提取正文累计" },
+          { label: "最近更新", value: stats?.latest ? timeAgo(stats.latest) : "—", sub: "最新采集时间" },
+        ].map((c) => (
+          <Card key={c.label} className="p-3.5">
+            <p className="font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">{c.label}</p>
+            <p className="mt-1 text-xl font-bold tabular-nums tracking-tight text-foreground">{c.value}</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">{c.sub}</p>
+          </Card>
+        ))}
+      </div>
+
+      {/* 工具栏 */}
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <div className="relative w-full max-w-sm">
+          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="按 URL / 域名 / 标题搜索…"
+            className="h-9 rounded-full pl-9"
+          />
+        </div>
+        <span className="ml-auto font-mono text-[11px] tabular-nums text-muted-foreground">
+          {total} rows · page {page}/{totalPages}
+        </span>
       </div>
 
       {/* 表格 */}
@@ -216,25 +261,25 @@ export default function DataPage() {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                  <th className="px-4 py-3 font-medium">标题 / URL</th>
-                  <th className="hidden px-4 py-3 font-medium md:table-cell">域名</th>
-                  <th className="hidden px-4 py-3 font-medium sm:table-cell">提取方式</th>
-                  <th className="hidden px-4 py-3 font-medium lg:table-cell">时间</th>
-                  <th className="px-4 py-3" />
+                <tr className="border-b border-border bg-secondary/30 text-left font-mono text-[10px] uppercase tracking-[0.16em] text-muted-foreground">
+                  <th className="px-4 py-2.5 font-medium">标题 / URL</th>
+                  <th className="hidden px-4 py-2.5 font-medium md:table-cell">域名</th>
+                  <th className="hidden px-4 py-2.5 font-medium sm:table-cell">提取方式</th>
+                  <th className="hidden px-4 py-2.5 font-medium lg:table-cell">时间</th>
+                  <th className="px-4 py-2.5" />
                 </tr>
               </thead>
-              <tbody>
+              <tbody className="divide-y divide-border/60">
                 {rows.map((row) => (
-                  <tr key={row.id || row.url} className="border-b border-border/60 transition hover:bg-accent/40">
-                    <td className="max-w-[380px] px-4 py-2.5">
+                  <tr key={row.id || row.url} className="row-hover-actions transition-colors hover:bg-accent/30">
+                    <td className="max-w-[420px] px-4 py-2.5">
                       <p className="truncate font-medium text-foreground">{row.title || "（无标题）"}</p>
-                      <a href={row.url} target="_blank" rel="noreferrer" className="flex items-center gap-1 truncate text-xs text-muted-foreground hover:text-foreground">
+                      <a href={row.url} target="_blank" rel="noreferrer" className="block truncate font-mono text-[11px] text-muted-foreground hover:text-brand">
                         {row.url}
                       </a>
                     </td>
                     <td className="hidden px-4 py-2.5 md:table-cell">
-                      <span className="font-mono text-xs text-muted-foreground">{row.domain}</span>
+                      <span className="rounded-md bg-secondary px-1.5 py-0.5 font-mono text-[11px] text-muted-foreground">{row.domain}</span>
                     </td>
                     <td className="hidden px-4 py-2.5 sm:table-cell">
                       <Badge variant="secondary">{row.extraction_method || "text"}</Badge>
@@ -243,9 +288,11 @@ export default function DataPage() {
                       {row.created_at ? timeAgo(row.created_at) : "—"}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      <Button variant="outline" size="sm" onClick={() => setSelected(row)}>
-                        查看
-                      </Button>
+                      <span className="row-actions">
+                        <Button variant="outline" size="sm" onClick={() => setSelected(row)}>
+                          查看
+                        </Button>
+                      </span>
                     </td>
                   </tr>
                 ))}

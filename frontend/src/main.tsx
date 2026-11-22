@@ -2,8 +2,8 @@ import { StrictMode } from "react";
 import { BrowserRouter } from "react-router-dom";
 import { createRoot } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { Toaster } from "sonner";
 import App from "./App";
+import { ThemedToaster } from "./components/ThemedToaster";
 import { useStore, applyTheme } from "./store";
 import "./index.css";
 
@@ -17,14 +17,12 @@ const queryClient = new QueryClient({
   },
 });
 
-// v3：React 19 + StrictMode 回归（echarts 双挂载问题由 <Chart> 封装的
-// 正确 dispose 生命周期解决，不再靠禁用 StrictMode 掩盖）
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
     <QueryClientProvider client={queryClient}>
       <BrowserRouter>
         <App />
-        <Toaster position="top-right" richColors closeButton theme={useStore.getState().theme} />
+        <ThemedToaster />
       </BrowserRouter>
     </QueryClientProvider>
   </StrictMode>,

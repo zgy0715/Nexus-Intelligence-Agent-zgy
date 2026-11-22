@@ -1,13 +1,11 @@
 /**
- * 布局组件 — 侧边栏（分组导航 + 模型状态卡）+ 顶栏 + 内容区。
- *
- * v3.1：导航按「采集 / 情报 / 系统」三组分区（功能一目了然），
- * 底部常驻模型状态卡（主力模型 vs 辅助模型，绿点在线/红点离线）。
+ * 产品级外壳 — 顶部品牌栏（命令搜索 + 模型状态 + 主题切换）+ 水平导航标签。
+ * 参考 Vercel / Linear 的顶栏式信息架构：内容区全宽、导航一眼可见、
+ * 键盘优先（Ctrl+K）。路由切换带轻量过渡。
  */
 
-import { NavLink, Outlet } from "react-router-dom";
-import { CommandPalette } from "./CommandPalette";
-import { ModelStatusCard, ModelStatusDots } from "./ModelStatusCard";
+import { NavLink, Outlet, useLocation } from "react-router-dom";
+import { AnimatePresence, motion } from "motion/react";
 import {
   Bot,
   Globe,
@@ -15,15 +13,26 @@ import {
   Database,
   Activity,
   Settings,
-  Menu,
-  X,
-  Sun,
-  Moon,
   Sparkles,
+  CalendarClock,
+  Home,
 } from "lucide-react";
-import { useStore } from "../store";
+import { CommandPalette } from "./CommandPalette";
+import { ModelChip } from "./ModelChip";
+import { useStore, THEMES } from "../store";
+import { usePageTitle } from "@/hooks/usePageTitle";
 import { cn } from "@/lib/utils";
-import { Button } from "@/components/ui/Button";
+
+// 路由 → 标签页标题（LandingPage 不经过 Layout，标题保持默认）
+const PAGE_TITLES: Record<string, string> = {
+  "/agent": "自主 Agent",
+  "/crawl": "批量爬取",
+  "/schedules": "定时采集",
+  "/qa": "语义问答",
+  "/data": "数据浏览",
+  "/monitor": "任务监控",
+  "/settings": "系统设置",
+};
 
 interface NavItem {
   to: string;
@@ -32,136 +41,114 @@ interface NavItem {
   end?: boolean;
 }
 
-/** 导航分组：采集 → 情报 → 系统 */
-const NAV_GROUPS: { label: string; items: NavItem[] }[] = [
-  {
-    label: "采集",
-    items: [
-      { to: "/", icon: Bot, label: "自主 Agent", end: true },
-      { to: "/crawl", icon: Globe, label: "批量爬取" },
-    ],
-  },
-  {
-    label: "情报",
-    items: [
-      { to: "/qa", icon: MessageSquare, label: "语义问答" },
-      { to: "/data", icon: Database, label: "数据浏览" },
-    ],
-  },
-  {
-    label: "系统",
-    items: [
-      { to: "/monitor", icon: Activity, label: "任务监控" },
-      { to: "/settings", icon: Settings, label: "系统设置" },
-    ],
-  },
+const NAV_ITEMS: NavItem[] = [
+  { to: "/", icon: Home, label: "首页", end: true },
+  { to: "/agent", icon: Bot, label: "自主 Agent", end: true },
+  { to: "/crawl", icon: Globe, label: "批量爬取" },
+  { to: "/schedules", icon: CalendarClock, label: "定时采集" },
+  { to: "/qa", icon: MessageSquare, label: "语义问答" },
+  { to: "/data", icon: Database, label: "数据浏览" },
+  { to: "/monitor", icon: Activity, label: "任务监控" },
+  { to: "/settings", icon: Settings, label: "系统设置" },
 ];
 
+function ThemeSwitcher() {
+  const theme = useStore((s) => s.theme);
+  const setTheme = useStore((s) => s.setTheme);
+  return (
+    <div
+      className="inline-flex items-center rounded-full border border-border bg-secondary/60 p-0.5"
+      role="radiogroup"
+      aria-label="设计主题"
+    >
+      {THEMES.map((t) => (
+        <button
+          key={t.key}
+          role="radio"
+          aria-checked={theme === t.key}
+          title={`${t.label} · ${t.hint}`}
+          onClick={() => setTheme(t.key)}
+          className={cn(
+            "rounded-full px-2.5 py-1 text-[11px] font-medium transition-all duration-200",
+            theme === t.key
+              ? "bg-card text-foreground shadow-sm"
+              : "text-muted-foreground hover:text-foreground",
+          )}
+        >
+          {t.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 export default function Layout() {
-  const { sidebarOpen, toggleSidebar, setSidebarOpen, theme, toggleTheme } = useStore();
+  const location = useLocation();
+
+  // 路由级标签页标题；旧 store 字段仅剩兼容持久化的用途，不再使用
+  usePageTitle(PAGE_TITLES[location.pathname]);
 
   return (
-    <div className="flex h-screen overflow-hidden bg-background">
-      {/* 移动端遮罩 */}
-      {sidebarOpen && (
-        <div
-          className="fixed inset-0 z-30 bg-black/40 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
-        />
-      )}
+    <div className="flex h-screen flex-col overflow-hidden bg-background">
+      {/* 顶栏：品牌 + 命令搜索 + 状态 + 主题 */}
+      <header className="shrink-0 border-b border-border bg-card/70 backdrop-blur-md">
+        <div className="mx-auto flex h-14 max-w-[1440px] items-center gap-3 px-4 lg:px-8">
+          <NavLink to="/" className="flex items-center gap-2.5">
+            <span className="brand-mark flex h-8 w-8 items-center justify-center rounded-lg">
+              <Sparkles size={16} className="text-brand-foreground" />
+            </span>
+            <span className="hidden flex-col leading-tight md:flex">
+              <span className="text-sm font-bold tracking-tight text-foreground">NIA</span>
+              <span className="text-[10px] text-muted-foreground">Nexus Intelligence Agent</span>
+            </span>
+          </NavLink>
 
-      {/* 侧边栏 */}
-      <aside
-        className={cn(
-          "fixed z-40 flex h-full flex-col border-r border-border bg-card transition-all duration-300 lg:relative",
-          sidebarOpen ? "w-60" : "w-0 lg:w-16",
-        )}
-      >
-        {/* Logo */}
-        <div className="flex h-16 shrink-0 items-center gap-3 border-b border-border px-4">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-primary shadow-sm">
-            <Sparkles size={18} className="text-primary-foreground" />
+          <div className="ml-auto flex items-center gap-2">
+            <ModelChip />
+            <ThemeSwitcher />
           </div>
-          {sidebarOpen && (
-            <div className="flex flex-col overflow-hidden">
-              <span className="whitespace-nowrap text-sm font-bold text-foreground">NIA</span>
-              <span className="whitespace-nowrap text-[10px] text-muted-foreground">
-                Nexus Intelligence Agent
-              </span>
-            </div>
-          )}
         </div>
 
-        {/* 分组导航 */}
-        <nav className="flex-1 overflow-y-auto px-2 py-3">
-          {NAV_GROUPS.map((group) => (
-            <div key={group.label} className="mb-3">
-              {sidebarOpen ? (
-                <p className="mb-1 px-3 text-[10px] font-medium uppercase tracking-widest text-muted-foreground/70">
-                  {group.label}
-                </p>
-              ) : (
-                <div className="mx-auto mb-2 h-px w-6 bg-border" />
-              )}
-              <div className="flex flex-col gap-0.5">
-                {group.items.map((item) => (
-                  <NavLink
-                    key={item.to}
-                    to={item.to}
-                    end={item.end}
-                    onClick={() => {
-                      if (window.innerWidth < 1024) setSidebarOpen(false);
-                    }}
-                    className={({ isActive }) =>
-                      cn(
-                        "group flex items-center gap-3 rounded-lg px-3 py-2 transition-all duration-200",
-                        !sidebarOpen && "justify-center",
-                        isActive
-                          ? "bg-accent font-medium text-accent-foreground"
-                          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-                      )
-                    }
-                  >
-                    <item.icon size={18} className="shrink-0" />
-                    {sidebarOpen && <span className="whitespace-nowrap text-sm">{item.label}</span>}
-                  </NavLink>
-                ))}
-              </div>
-            </div>
-          ))}
+        {/* 水平导航标签 */}
+        <nav className="mx-auto max-w-[1440px] px-4 lg:px-8">
+          <div className="-mb-px flex gap-1 overflow-x-auto no-scrollbar">
+            {NAV_ITEMS.map((item) => (
+              <NavLink
+                key={item.to}
+                to={item.to}
+                end={item.end}
+                className={({ isActive }) =>
+                  cn(
+                    "flex shrink-0 items-center gap-1.5 border-b-2 px-3 py-2.5 text-[13px] transition-colors duration-150",
+                    isActive
+                      ? "border-brand font-medium text-foreground"
+                      : "border-transparent text-muted-foreground hover:border-border hover:text-foreground",
+                  )
+                }
+              >
+                <item.icon size={15} className="shrink-0" />
+                {item.label}
+              </NavLink>
+            ))}
+          </div>
         </nav>
-
-        {/* 底部：常驻模型状态卡（主力 vs 辅助，在线/离线） */}
-        <div className="shrink-0 border-t border-border p-2.5">
-          {sidebarOpen ? <ModelStatusCard /> : <ModelStatusDots />}
-        </div>
-      </aside>
+      </header>
 
       <CommandPalette />
 
-      {/* 主内容区 */}
-      <div className="flex min-w-0 flex-1 flex-col">
-        {/* 顶栏 */}
-        <header className="flex h-14 shrink-0 items-center gap-3 border-b border-border bg-card px-4">
-          <Button variant="ghost" size="icon" onClick={toggleSidebar} aria-label="切换侧边栏">
-            {sidebarOpen ? <X size={18} /> : <Menu size={18} />}
-          </Button>
-          <div className="h-4 w-px bg-border" />
-          <span className="text-[11px] font-medium uppercase tracking-[0.15em] text-muted-foreground">
-            Nexus Intelligence
-          </span>
-          <div className="ml-auto">
-            <Button variant="ghost" size="icon" onClick={toggleTheme} aria-label="切换主题">
-              {theme === "dark" ? <Sun size={18} /> : <Moon size={18} />}
-            </Button>
-          </div>
-        </header>
-
-        {/* 内容 */}
-        <main className="flex-1 overflow-auto">
+      {/* 内容区：路由过渡 */}
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.main
+          key={location.pathname}
+          initial={{ opacity: 0, y: 8 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -4 }}
+          transition={{ duration: 0.18, ease: "easeOut" }}
+          className="flex-1 overflow-auto"
+        >
           <Outlet />
-        </main>
-      </div>
+        </motion.main>
+      </AnimatePresence>
     </div>
   );
 }

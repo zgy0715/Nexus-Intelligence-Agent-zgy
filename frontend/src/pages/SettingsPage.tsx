@@ -12,7 +12,6 @@ import {
   Settings,
   RefreshCw,
   Cloud,
-  Cpu,
   Server,
   Brain,
   Database,
@@ -132,7 +131,7 @@ function ModelRoleCard({
 }
 
 const CONFIG_GROUPS: { label: string; icon: React.ElementType; match: (k: string) => boolean }[] = [
-  { label: "模型", icon: Brain, match: (k) => k.includes("LLM") || k.includes("AUX") },
+  { label: "模型", icon: Brain, match: (k) => k.includes("LLM") },
   { label: "Embedding", icon: Boxes, match: (k) => k.includes("EMBED") },
   { label: "向量存储", icon: Database, match: (k) => k.includes("VECTOR") || k.includes("QDRANT") || k.includes("FAISS") },
   { label: "基础设施", icon: Server, match: (k) => k.includes("REDIS") || k.includes("MYSQL") },
@@ -158,9 +157,10 @@ export default function SettingsPage() {
   const aux = status?.aux_llm;
 
   return (
-    <div className="mx-auto max-w-5xl p-4 lg:p-6">
+    <div className="mx-auto max-w-[1440px] p-4 lg:p-8">
       <PageHeader
         icon={Settings}
+        eyebrow="系统 · Configuration"
         title="系统设置"
         subtitle="服务状态 · 模型角色 · 生效配置"
         actions={
@@ -177,102 +177,105 @@ export default function SettingsPage() {
         }
       />
 
-      {/* 服务状态四卡 */}
-      {statusQuery.isLoading ? (
-        <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, i) => (
-            <Skeleton key={i} className="h-[72px]" />
-          ))}
-        </div>
-      ) : (
-        <div className="mb-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          <StatusCard
-            name="Redis"
-            icon={Server}
-            connected={!!status?.redis?.connected}
-            detail={status?.redis?.version ? `v${status.redis.version}` : undefined}
-          />
-          <StatusCard
-            name="MySQL"
-            icon={Database}
-            connected={!!status?.mysql?.connected}
-            detail={status?.mysql?.version ? `v${status.mysql.version.split("-")[0]}` : undefined}
-          />
-          <StatusCard
-            name={`主力模型（${main?.provider ?? "?"}）`}
+      <div className="grid gap-6 lg:grid-cols-[340px_minmax(0,1fr)]">
+        {/* 左栏：服务状态 + 模型分工 */}
+        <div className="space-y-3">
+          <h2 className="font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">服务状态</h2>
+          {statusQuery.isLoading ? (
+            <div className="space-y-3">
+              {Array.from({ length: 3 }).map((_, i) => (
+                <Skeleton key={i} className="h-[72px]" />
+              ))}
+            </div>
+          ) : (
+            <>
+              <StatusCard
+                name="Redis"
+                icon={Server}
+                connected={!!status?.redis?.connected}
+                detail={status?.redis?.version ? `v${status.redis.version}` : undefined}
+              />
+              <StatusCard
+                name="MySQL"
+                icon={Database}
+                connected={!!status?.mysql?.connected}
+                detail={status?.mysql?.version ? `v${status.mysql.version.split("-")[0]}` : undefined}
+              />
+              <StatusCard
+                name={`主力模型（${main?.provider ?? "?"}）`}
+                icon={Cloud}
+                connected={!!main?.connected}
+                detail={main?.model}
+              />
+              {aux && (
+                <StatusCard
+                  name={`辅助模型（${aux.provider ?? "—"}）`}
+                  icon={Brain}
+                  connected={!!aux.connected}
+                  detail={aux.enabled ? aux.model : undefined}
+                  offlineNote={aux.enabled ? "离线 · 回退主模型" : "未启用"}
+                />
+              )}
+            </>
+          )}
+          <h2 className="pt-3 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">模型分工</h2>
+          <ModelRoleCard
             icon={Cloud}
+            accent
+            roleLabel="主力模型"
+            provider={main?.provider ?? config.LLM_PROVIDER ?? "—"}
+            model={main?.model || config.LLM_MODEL || ""}
             connected={!!main?.connected}
-            detail={main?.model}
+            duties={["Agent 推理与工具调用", "结构化提取", "RAG 回答", "报告生成"]}
+            note="关键路径由主力模型（云 API）承担；辅助模型不可用时自动回退到这里。"
           />
-          <StatusCard
-            name={`辅助模型（${aux?.provider ?? "未启用"}）`}
-            icon={Cpu}
-            connected={!!aux?.connected}
-            detail={aux?.enabled ? aux.model : undefined}
-            offlineNote={aux?.enabled ? "离线 · 回退主模型" : "未启用"}
-          />
+          {(aux?.enabled || config.AUX_LLM_PROVIDER) && (
+            <ModelRoleCard
+              icon={Brain}
+              roleLabel="辅助模型（本地）"
+              provider={aux?.provider ?? config.AUX_LLM_PROVIDER ?? "—"}
+              model={aux?.model || config.AUX_LLM_MODEL || ""}
+              connected={!!aux?.connected}
+              duties={["上下文压缩摘要", "RAG 查询改写"]}
+              note="廉价后台任务路由到本地 Ollama，零 token 成本；不可用时自动回退主力模型。"
+            />
+          )}
         </div>
-      )}
 
-      {/* 模型角色区 */}
-      <h2 className="mb-3 text-sm font-semibold text-foreground">模型分工</h2>
-      <div className="mb-6 grid gap-3 md:grid-cols-2">
-        <ModelRoleCard
-          icon={Cloud}
-          roleLabel="主力模型"
-          provider={main?.provider ?? config.LLM_PROVIDER ?? "—"}
-          model={main?.model || config.LLM_MODEL || ""}
-          connected={!!main?.connected}
-          duties={["Agent 推理与工具调用", "结构化提取", "RAG 回答", "报告生成"]}
-          note="所有关键路径都由主力模型承担；辅助模型不可用时自动回退到这里。"
-        />
-        <ModelRoleCard
-          icon={Cpu}
-          accent
-          roleLabel="辅助模型（本地）"
-          provider={aux?.provider ?? config.AUX_LLM_PROVIDER ?? "—"}
-          model={aux?.model || config.AUX_LLM_MODEL || ""}
-          connected={!!aux?.connected}
-          duties={["上下文压缩摘要", "RAG 查询改写"]}
-          note={
-            aux && !aux.enabled
-              ? "未启用：设置 AUX_LLM_PROVIDER 后生效（本地 Ollama，零 token 成本）。"
-              : "本地运行零 token 成本；离线时相关后台任务自动回退主模型，功能不缺失。"
-          }
-        />
-      </div>
-
-      {/* 配置分组 */}
-      <h2 className="mb-3 text-sm font-semibold text-foreground">生效配置</h2>
-      {configQuery.isLoading ? (
-        <Skeleton className="h-40 w-full" />
-      ) : (
-        <div className="grid gap-3 md:grid-cols-2">
-          {CONFIG_GROUPS.map((group) => {
-            const entries = Object.entries(config).filter(([k]) => group.match(k));
-            if (entries.length === 0) return null;
-            return (
-              <Card key={group.label} className="overflow-hidden">
-                <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-                  <group.icon className="h-3.5 w-3.5 text-muted-foreground" />
-                  <span className="text-sm font-medium text-foreground">{group.label}</span>
-                  <span className="ml-auto text-[10px] text-muted-foreground">{entries.length} 项</span>
-                </div>
-                <div className="px-4 py-2">
-                  {entries.map(([k, v]) => (
-                    <div key={k} className="flex items-baseline justify-between gap-3 border-b border-border/40 py-1.5 last:border-0">
-                      <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{k}</span>
-                      <span className="truncate text-right font-mono text-xs text-foreground">
-                        {typeof v === "boolean" ? (v ? "启用" : "关闭") : String(v) || "—"}
-                      </span>
+        {/* 右栏：生效配置 */}
+        <div className="min-w-0">
+          <h2 className="mb-3 font-mono text-[11px] uppercase tracking-[0.18em] text-muted-foreground">生效配置</h2>
+          {configQuery.isLoading ? (
+            <Skeleton className="h-40 w-full" />
+          ) : (
+            <div className="grid gap-3 md:grid-cols-2">
+              {CONFIG_GROUPS.map((group) => {
+                const entries = Object.entries(config).filter(([k]) => group.match(k));
+                if (entries.length === 0) return null;
+                return (
+                  <Card key={group.label} className="overflow-hidden">
+                    <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+                      <group.icon className="h-3.5 w-3.5 text-muted-foreground" />
+                      <span className="text-sm font-medium text-foreground">{group.label}</span>
+                      <span className="ml-auto text-[10px] text-muted-foreground">{entries.length} 项</span>
                     </div>
-                  ))}
-                </div>
-              </Card>
-            );
-          })}
+                    <div className="px-4 py-2">
+                      {entries.map(([k, v]) => (
+                        <div key={k} className="flex items-baseline justify-between gap-3 border-b border-border/40 py-1.5 last:border-0">
+                          <span className="shrink-0 font-mono text-[11px] text-muted-foreground">{k}</span>
+                          <span className="truncate text-right font-mono text-xs text-foreground">
+                            {typeof v === "boolean" ? (v ? "启用" : "关闭") : String(v) || "—"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
         </div>
-      )}
+      </div>
     </div>
   );
 }
