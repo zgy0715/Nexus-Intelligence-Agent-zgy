@@ -219,7 +219,7 @@ export default function LandingPage() {
         <motion.div style={{ y: heroY, opacity: heroOpacity }} className="relative z-10 flex max-w-3xl flex-col items-center text-center">
           <Reveal>
             <span className="inline-flex items-center gap-2 rounded-full border border-brand/30 bg-brand/10 px-3 py-1 font-mono text-[11px] tracking-wide text-brand">
-              Qoder 高校大赛 · 参赛作品
+              私有化部署 · 数据 100% 本地
             </span>
           </Reveal>
           <Reveal delay={0.08}>
@@ -454,7 +454,7 @@ cd frontend && npm install && npm run dev   # → http://localhost:5173`}
         <div className="mx-auto flex max-w-[1200px] flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
           <span className="flex items-center gap-2">
             <Sparkles className="h-3.5 w-3.5 text-brand" />
-            NIA · Nexus Intelligence Agent — Qoder 高校大赛参赛作品
+            NIA · Nexus Intelligence Agent — 私有化的智能爬虫与情报分析系统
           </span>
           <span className="font-mono">React 19 · FastAPI · FAISS · BM25 · 全本地数据</span>
         </div>
