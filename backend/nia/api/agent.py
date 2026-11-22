@@ -204,10 +204,13 @@ class AgentRequest(BaseModel):
             s = (s or "").strip()
             if not s:
                 continue
-            ok, reason = is_safe_url(s)
+            # resolve=True：连 DNS 解析结果一起校验，防「域名指向内网」的种子
+            # （localtest.me / nip.io 类）借 JS 渲染路径探测内网
+            ok, reason = is_safe_url(s, resolve=True)
             if not ok:
                 raise ValueError(f"种子 URL 不合法（{reason}）: {s}")
-            cleaned.append(s)
+            if s not in cleaned:  # 重复种子去重，避免浪费页面预算
+                cleaned.append(s)
         if not cleaned:
             raise ValueError("至少需要一个有效的种子 URL")
         if len(cleaned) > 10:
