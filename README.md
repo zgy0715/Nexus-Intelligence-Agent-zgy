@@ -5,6 +5,7 @@
   自主爬取 Agent · 混合检索 RAG · 采集即知识库 · 全栈本地运行
 </p>
 
+[![CI](https://github.com/zgy0715/Nexus-Intelligence-Agent-zgy/actions/workflows/ci.yml/badge.svg)](https://github.com/zgy0715/Nexus-Intelligence-Agent-zgy/actions/workflows/ci.yml)
 [![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://reactjs.org/)
 [![Vite](https://img.shields.io/badge/Vite-8-646CFF?logo=vite&logoColor=white)](https://vitejs.dev/)
 [![Tailwind](https://img.shields.io/badge/Tailwind-4-06B6D4?logo=tailwindcss&logoColor=white)](https://tailwindcss.com/)
